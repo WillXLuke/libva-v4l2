@@ -161,6 +161,7 @@ void Decoder::allocate(unsigned type, unsigned count, std::vector<std::shared_pt
         QueueBuffer q(type, i);
         checked(fd_, VIDIOC_QUERYBUF, &q.buffer, "QUERYBUF");
         auto m = std::make_shared<Memory>();
+        m->origin = MemoryOrigin::Iris;
         m->index = i;
         m->size = q.plane.length;
         if (type == OUTPUT) {

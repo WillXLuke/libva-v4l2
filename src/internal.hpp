@@ -5,6 +5,7 @@
 #include <va/va_drmcommon.h>
 #include <va/va_dec_hevc.h>
 #include <va/va_dec_vp9.h>
+#include <va/va_enc_h264.h>
 #include <algorithm>
 #include <chrono>
 #include <cstring>
@@ -19,6 +20,8 @@
 #include <cstdlib>
 #include <atomic>
 #include <type_traits>
+
+extern "C" int irisva_msm_allocate(int drm_fd, uint64_t size, int *coherent);
 
 namespace irisva {
 struct Error : std::runtime_error {
@@ -39,7 +42,9 @@ template <class... A> void trace(const char *f, A... a) {
         std::fprintf(stderr, "\n");
     }
 }
+enum class MemoryOrigin { Unknown, MsmWriteCombined, MsmCoherent, Iris };
 struct Memory {
+    MemoryOrigin origin = MemoryOrigin::Unknown;
     int fd = -1;
     void *mapping = nullptr;
     size_t size = 0;
@@ -51,7 +56,7 @@ struct Memory {
 };
 class Decoder;
 class SurfaceCopier {
-    // Calls are serialized by the owning Decoder's mutex, including lazy setup.
+    // Calls are serialized by the owning decoder or encoder, including lazy setup.
     struct Impl;
     int render_fd_; // Borrowed VA display fd; duplicated when GPU copying is first used.
     std::unique_ptr<Impl> impl_;
@@ -62,7 +67,14 @@ class SurfaceCopier {
     void copy(const std::shared_ptr<Memory> &destination, const std::shared_ptr<Memory> &source,
               unsigned width, unsigned height);
 };
+class Encoder;
+struct EncodeTask {
+    std::weak_ptr<Encoder> encoder;
+    bool pending = true;
+    VAStatus status = VA_STATUS_SUCCESS;
+};
 struct Surface {
+    std::shared_ptr<EncodeTask> encode_task;
     unsigned width, height, fourcc = VA_FOURCC_NV12;
     unsigned allocation_count = 1;
     std::shared_ptr<Memory> memory;
@@ -76,6 +88,7 @@ struct Surface {
     unsigned derived_images = 0, mapped_images = 0, acquired_handles = 0;
 };
 struct Buffer {
+    std::shared_ptr<EncodeTask> encode_task;
     VABufferType type;
     unsigned element_size = 0, elements = 0;
     std::vector<uint8_t> data;
@@ -83,6 +96,9 @@ struct Buffer {
     std::shared_ptr<Memory> memory;
     int acquired_fd = -1;
     bool mapped = false;
+    VACodedBufferSegment coded{};
+    bool coded_ready = false, coded_mapped = false;
+    uint32_t context_id = VA_INVALID_ID;
     ~Buffer();
     uint8_t *map();
     void unmap();
@@ -169,12 +185,45 @@ class Decoder {
     void refresh();
 };
 std::string find_device();
+std::string find_encoder_device();
+struct EncodePicture {
+    VAEncPictureParameterBufferH264 params{};
+    bool has_params = false;
+    std::vector<VAEncSliceParameterBufferH264> slices;
+};
+struct EncodeSettings {
+    VAEncSequenceParameterBufferH264 sequence{};
+    bool has_sequence = false;
+    unsigned rate_control = VA_RC_CQP;
+    unsigned bitrate = 0, peak_bitrate = 0, min_qp = 1, max_qp = 51;
+    unsigned fps_num = 30, fps_den = 1;
+};
+void render_encode_buffer(EncodeSettings &settings, EncodePicture &picture, const Buffer &buffer);
+class Encoder {
+    struct Impl;
+    std::unique_ptr<Impl> impl_;
+
+  public:
+    Encoder(const std::string &device, unsigned width, unsigned height, VAProfile profile,
+            const EncodeSettings &settings, const EncodePicture &picture, int render_fd);
+    ~Encoder();
+    std::shared_ptr<EncodeTask> encode(const EncodeSettings &settings, const EncodePicture &picture,
+                                       const std::shared_ptr<Surface> &input,
+                                       const std::shared_ptr<Buffer> &output);
+    bool sync(const std::shared_ptr<EncodeTask> &task, uint64_t timeout);
+    void refresh();
+    void finish();
+};
 void copy_surface(Memory &destination, Memory &source, unsigned width, unsigned height);
 void wait_surface_access(const Memory &memory, short events);
 struct Context {
     VAProfile profile;
+    VAEntrypoint entrypoint = VAEntrypointVLD;
     unsigned width, height;
     std::shared_ptr<Decoder> decoder;
+    std::shared_ptr<Encoder> encoder;
+    EncodeSettings encode_settings;
+    EncodePicture encode_picture;
     std::shared_ptr<Surface> target;
     Picture picture;
     H264State h264;
@@ -182,11 +231,17 @@ struct Context {
     HevcState hevc;
     Vp9Picture vp9_picture;
 };
+struct Config {
+    VAProfile profile;
+    VAEntrypoint entrypoint;
+    unsigned rate_control = VA_RC_CQP;
+};
 struct Driver {
     std::recursive_mutex mutex;
     std::string device;
+    std::string encoder_device;
     uint32_t next_id = 1;
-    std::map<uint32_t, VAProfile> configs;
+    std::map<uint32_t, Config> configs;
     std::map<uint32_t, std::shared_ptr<Context>> contexts;
     std::map<uint32_t, std::shared_ptr<Surface>> surfaces;
     std::map<uint32_t, std::shared_ptr<Buffer>> buffers;

@@ -93,7 +93,7 @@ void copy_surface(Memory &destination, Memory &source, unsigned width, unsigned 
         auto us = std::chrono::duration_cast<std::chrono::microseconds>(
                       std::chrono::steady_clock::now() - start)
                       .count();
-        trace("persistent copy mode=cpu %ux%u fourcc=%#x capture=%u time-us=%lld", width, height,
+        trace("surface copy mode=cpu %ux%u fourcc=%#x capture=%u time-us=%lld", width, height,
               source.fourcc, source.index, (long long)us);
     }
 }

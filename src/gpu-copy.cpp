@@ -205,7 +205,7 @@ struct SurfaceCopier::Impl {
         check(!mode || !strcmp(mode, "gpu") || !strcmp(mode, "cpu"),
               "IRIS_VAAPI_COPY must be gpu or cpu", VA_STATUS_ERROR_INVALID_PARAMETER);
         cpu = mode && !strcmp(mode, "cpu");
-        trace("persistent copy selected mode=%s", cpu ? "cpu" : "gpu");
+        trace("surface copy selected mode=%s", cpu ? "cpu" : "gpu");
         if (!cpu)
             worker = std::thread([this, render_fd] {
                 // All EGL calls, including teardown, stay on this thread. VA entry
@@ -266,8 +266,8 @@ void SurfaceCopier::copy(const std::shared_ptr<Memory> &dst, const std::shared_p
         }
         impl_->wake.notify_one();
         done.get();
-        trace("persistent copy mode=gpu %ux%u fourcc=%#x capture=%u time-us=%lld", w, h,
-              src->fourcc, src->index,
+        trace("surface copy mode=gpu %ux%u fourcc=%#x capture=%u time-us=%lld", w, h, src->fourcc,
+              src->index,
               (long long)std::chrono::duration_cast<std::chrono::microseconds>(
                   std::chrono::steady_clock::now() - start)
                   .count());

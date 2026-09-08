@@ -16,6 +16,7 @@ gbm = dependency('gbm')
 sources = files(
   'src/backend.cpp',
   'src/decoder.cpp',
+  'src/encoder.cpp',
   'src/gpu-copy.cpp',
   'src/h264.cpp',
   'src/hevc.cpp',

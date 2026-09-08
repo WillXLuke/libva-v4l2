@@ -1,0 +1,1 @@
+info = dict(gpu=dict(name="Adreno 690", gen="not-applicable"), soc="SC8280XP", decoder="Iris HFI gen2")

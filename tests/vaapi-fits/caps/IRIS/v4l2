@@ -1,0 +1,11 @@
+# Capabilities of this backend, not the complete Iris hardware.
+caps = dict(
+    decode=dict(
+        vp9_8=dict(minres=(128, 128), maxres=res8k, fmts=["NV12"]),
+        vp9_10=dict(minres=(128, 128), maxres=res8k, fmts=["P010"]),
+        avc=dict(minres=(128, 128), maxres=res8k, fmts=["NV12"]),
+        hevc_8=dict(minres=(128, 128), maxres=res8k, fmts=["NV12"]),
+        hevc_10=dict(minres=(128, 128), maxres=res8k, fmts=["P010"]),
+    ),
+    encode=dict(), vdenc=dict(), vpp=dict(),
+)

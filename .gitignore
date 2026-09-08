@@ -1,0 +1,23 @@
+# Local notes, diagnostic tools, test data, and historical results.
+/tmp/
+/results/
+
+# Build and development artifacts.
+/build/
+/build-*/
+/subprojects/packagecache/
+/compile_commands.json
+/.cache/
+__pycache__/
+*.py[cod]
+
+# External test frameworks.
+/fluster/
+/vaapi-fits/
+/test-env/
+
+# Local Arch Linux source archives and package builds.
+/packaging/arch/src/
+/packaging/arch/pkg/
+/packaging/arch/*.tar.gz
+/packaging/arch/*.pkg.tar.zst

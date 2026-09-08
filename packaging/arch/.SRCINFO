@@ -1,0 +1,19 @@
+pkgbase = libva-v4l2
+	pkgdesc = VA-API backend for Qualcomm Iris stateful V4L2 M2M decoding
+	pkgver = 0.1.0
+	pkgrel = 9
+	arch = aarch64
+	license = MIT
+	license = GPL-2.0-only
+	makedepends = meson
+	makedepends = ninja
+	depends = glibc
+	depends = gcc-libs
+	depends = libva
+	depends = libdrm
+	depends = mesa
+	depends = libglvnd
+	source = libva-v4l2-0.1.0.tar.gz
+	sha256sums = 93b02fc09d147ad542ec2ac57fdae30c21c0f62607742993d5a42c2219166efd
+
+pkgname = libva-v4l2

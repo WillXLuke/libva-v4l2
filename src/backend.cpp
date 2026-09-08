@@ -759,16 +759,21 @@ API(
     check(out, "null surface descriptor", VA_STATUS_ERROR_INVALID_PARAMETER);
     check(type == VA_SURFACE_ATTRIB_MEM_TYPE_DRM_PRIME_2, "export requires DRM PRIME2",
           VA_STATUS_ERROR_UNSUPPORTED_MEMORY_TYPE);
-    check(!(flags & VA_EXPORT_SURFACE_WRITE_ONLY), "writable decoded export unsupported",
-          VA_STATUS_ERROR_UNIMPLEMENTED);
     auto s = surface(d, id); synchronize(d, s);
+    // GPU producers such as Sunshine render into exported encoder input.
+    // Only our independent GEM storage is writable: Iris CAPTURE allocations
+    // may still be decoder references and have cached CPU aliases.
+    check(!(flags & VA_EXPORT_SURFACE_WRITE_ONLY) || !s->memory ||
+              s->memory->origin == MemoryOrigin::MsmCoherent ||
+              s->memory->origin == MemoryOrigin::MsmWriteCombined,
+          "writable export requires independent GEM storage", VA_STATUS_ERROR_UNIMPLEMENTED);
     if (!s->memory) s->memory = allocate_undecoded_surface(ctx, *s); auto m = s->memory;
     auto &desc = *static_cast<VADRMPRIMESurfaceDescriptor *>(out); desc = {};
     desc.fourcc = m->fourcc; desc.width = s->width; desc.height = s->height; desc.num_objects = 1;
     desc.objects[0].fd = fcntl(m->fd, F_DUPFD_CLOEXEC, 0);
     check(desc.objects[0].fd >= 0, "duplicate DMA-BUF fd"); if (!s->token) {
         if (!s->persistent_export)
-            trace("surface=%#x persistent pre-decode export (synchronous copy)", id);
+            trace("surface=%#x persistent GEM export (copy if later decoded)", id);
         s->persistent_export = true;
     } desc.objects[0]
                                                                 .size = m->size;

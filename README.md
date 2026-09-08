@@ -1,215 +1,131 @@
 # libva-v4l2
 
-A VA-API driver backed by the Linux V4L2 stateful memory-to-memory decoder
-interface. It translates VA-API decode requests into compressed bitstreams for
-the Qualcomm Iris driver and exposes decoded frames as VA surfaces and DMA-BUFs.
+A VA-API backend for Qualcomm Iris, using the Linux V4L2 stateful M2M interface.
+It provides hardware video decoding and H.264 encoding on **SC8280XP**, tested on
+**Radxa Dragon Q8B**. The project is experimental and targets this platform;
+it is not a generic backend for all V4L2 devices.
 
-The current implementation targets **Qualcomm SC8280XP**, tested on the
-**Radxa Dragon Q8B** with Iris HFI gen2. It is experimental and is not a generic
-backend for every V4L2 M2M device. The driver does not provide software decoding.
+## Support
 
-## Supported formats
+| Codec | Decoding | Encoding |
+| --- | --- | --- |
+| H.264 / AVC | Constrained Baseline, Main, High (8-bit) | Same profiles (8-bit) |
+| H.265 / HEVC | Main, Main10 (8/10-bit) | — |
+| VP9 | Profiles 0 and 2 (8/10-bit) | — |
 
-| Codec | VA-API profiles | Bit depth | Surface format |
-| --- | --- | --- | --- |
-| H.264 / AVC | Constrained Baseline, Main, High | 8-bit | NV12 |
-| H.265 / HEVC | Main | 8-bit | NV12 |
-| H.265 / HEVC | Main10 | 10-bit | P010 |
-| VP9 | Profile 0 | 8-bit | NV12 |
-| VP9 | Profile 2 | 10-bit | P010 |
+Supported video is progressive 4:2:0. Decoding has been tested with FFmpeg,
+GStreamer, mpv, VLC, Chromium, and Kodi; H.264 encoding with FFmpeg, GStreamer,
+and Sunshine.
 
-All supported formats are progressive 4:2:0. Encoding and video processing
-(VPP) are not implemented.
-
-Basic hardware decoding has been exercised with FFmpeg, GStreamer, mpv, VLC,
-Chromium, and Kodi on the target board. Coverage includes pixel comparisons
-against software decoding, DMA-BUF import into EGL/GLES, and cached surface
-reuse. Application compatibility depends on the codec, rendering path, and
-application version; exhaustive stream coverage and long-duration playback
-validation remain ongoing.
+- H.264 encoding supports CQP, CBR, and VBR, even dimensions from 128×128 to
+  3840×2160, and IDR/P frames with one reference. B frames are unsupported.
+- Video processing (VPP), hardware scaling, and bit-depth conversion are not
+  implemented. Some streams and advanced codec features remain unsupported.
+- Compatible DMA-BUF paths avoid raw-frame copies. Applications that cache
+  surfaces before decoding use a GPU copy by default.
 
 ## Requirements
 
-- Linux with the Qualcomm Iris stateful decoder and MSM DRM drivers.
-- The accompanying Iris HFI gen2 kernel patches:
-  - [Decode-order output](patches/0001-media-iris-support-decode-order-output-on-HFI-gen2.patch),
-    required by the VA-API decode path.
-  - [CAPTURE buffer pool limit](patches/0002-media-iris-allow-larger-capture-buffer-pools-on-HFI-.patch),
-    required for larger application surface pools, including VLC's default pool.
-- A C++17 compiler, Meson 0.61 or newer, Ninja, and pkg-config.
-- Development files for libva, libdrm, EGL, GLES 3.2, and GBM.
-- Access to the Iris video device and DRM render node.
-
-The backend requires these kernel changes unless equivalent support is already
-present. The decode-order patch enables its behavior only when requested by the
-backend. Kernel patches must match the kernel being built.
-The two patches are provided as references for integrating these changes into
-your kernel; this repository does not build or distribute a kernel module package.
+- Linux with the Qualcomm Iris stateful driver and MSM DRM support.
+- The changes supplied in [patches/](patches/), unless already present in your
+  kernel: decode-order output, larger CAPTURE pools, and encoder deblocking
+  controls. The patches are references to integrate into your kernel.
+- Access to the Iris video devices and DRM render node.
+- A C++17 compiler, Meson ≥ 0.61, Ninja, pkg-config, and development libraries
+  for libva, libdrm, EGL, GLES 3.2, and GBM.
 
 ## Build and install
 
-On Arch Linux, install the build dependencies:
+On Arch Linux:
 
 ```sh
 sudo pacman -S --needed base-devel meson ninja pkgconf libva libdrm mesa libglvnd
-```
-
-Build the userspace driver:
-
-```sh
-meson setup build --buildtype=debugoptimized --prefix=/usr
-meson compile -C build
-```
-
-To use the build without installing it:
-
-```sh
-export LIBVA_DRIVER_NAME=v4l2
-export LIBVA_DRIVERS_PATH="$PWD/build"
-vainfo --display drm --device /dev/dri/renderD128
-```
-
-`vainfo` is provided by `libva-utils` on Arch Linux. The expected driver library
-is `v4l2_drv_video.so`.
-
-For a system installation, prefer the Arch package below, or run:
-
-```sh
-sudo meson install -C build
-unset LIBVA_DRIVERS_PATH LIBVA_DRIVER_NAME
-```
-
-Installation includes a relative `msm_drv_video.so -> v4l2_drv_video.so`
-symlink in the driver directory. This lets libva discover the backend
-automatically on Qualcomm MSM devices, including the tested DRM, Wayland, and
-X11 paths. `LIBVA_DRIVER_NAME=v4l2` remains available as an explicit override
-and is needed for the uninstalled build example above.
-
-Ensure Meson's `libdir` matches libva's driver search path. Set
-`-Dlibdir=lib` during configuration on systems using `/usr/lib/dri`.
-
-## Usage
-
-With the driver installed on the target MSM platform, no driver-selection
-environment variable is required. For example:
-
-```sh
-mpv --hwdec=vaapi input.mp4
-```
-
-To decode with FFmpeg and download 8-bit frames for checksum validation:
-
-```sh
-ffmpeg \
-  -threads 1 -hwaccel vaapi -hwaccel_device /dev/dri/renderD128 \
-  -hwaccel_output_format vaapi -i input.mp4 -an \
-  -vf hwdownload,format=nv12,format=yuv420p -f framemd5 -
-```
-
-For 10-bit HEVC or VP9, use
-`-vf hwdownload,format=p010le,format=yuv420p10le` instead.
-`hwdownload` copies frames to CPU memory and is intended here for validation.
-
-## Frame sharing and copies
-
-The driver supports read-only DRM PRIME2 exports of NV12 and P010 surfaces.
-There are two output paths:
-
-- **Direct export:** a surface exported after decoding shares its V4L2 CAPTURE
-  DMA-BUF with the application. A compatible GPU consumer can use this without
-  a decoded-frame copy in the backend.
-- **Persistent export:** an application that exports a surface before decoding
-  may cache its DMA-BUF, as Chromium does. The backend keeps stable storage and
-  updates it with a synchronized GPU copy. This is the default compatibility
-  path and is not zero-copy.
-
-Zero-copy across the entire playback pipeline also depends on the application's
-renderer and display stack. Compressed input is reconstructed and copied even
-when decoded frames use direct export.
-
-## Configuration
-
-Set these variables before launching the application; restart existing
-processes for changes to take effect.
-
-| Variable | Default | Description |
-| --- | --- | --- |
-| `LIBVA_DRIVER_NAME` | Automatic discovery | Set to `v4l2` to explicitly select this driver, for example with an uninstalled build. |
-| `LIBVA_DRIVERS_PATH` | libva's system path | Override the driver directory, for example with a local build. |
-| `IRIS_VAAPI_DEVICE` | Automatic discovery | Select a V4L2 decoder node, such as `/dev/video0`. |
-| `IRIS_VAAPI_COPY` | `gpu` | Select `gpu` or `cpu` for the persistent-export copy path. |
-| `IRIS_VAAPI_DEBUG` | Unset | Enable backend diagnostics when present, including when set to `0`. |
-| `IRIS_VAAPI_DUMP` | Unset | Write the reconstructed compressed bitstream to this file; use for a single decode session. The file is overwritten. |
-
-GPU initialization or copy failures return a VA error; the driver does not
-silently switch to CPU copying. To select CPU copying explicitly:
-
-```sh
-IRIS_VAAPI_COPY=cpu chromium
-```
-
-## Known limitations
-
-- No interlaced decoding, external DMA-BUF import, fragmented frame submission,
-  or dynamic resolution changes within a decode context.
-- H.264 FMO and SP/SI switching slices are unsupported.
-- HEVC RExt/SCC, multilayer streams, and non-4:2:0 formats are unsupported.
-  Main10 requires actual 10-bit content and P010 surfaces.
-- A new HEVC context must start at a BLA, IDR, or CRA random-access picture.
-  Earlier dependent pictures and unavailable RASL leading pictures return decode
-  errors immediately. Applications must discard them and continue to the next
-  usable random-access point; missing reference pictures cannot be recovered.
-- VP9 requires an initial key frame. Profiles 1/3, 12-bit content, and hidden
-  frames that refresh no reference slots are unsupported. Some large-resolution
-  test streams still fail.
-- VPP capability probes can report an unsupported profile even when ordinary
-  decoding works.
-
-## Arch Linux package
-
-[packaging/arch/PKGBUILD](packaging/arch/PKGBUILD) builds the userspace driver
-from a local source snapshot:
-
-```sh
 python3 packaging/make-dist.py
 cd packaging/arch
 makepkg -si
 ```
 
-After changing packaged sources, regenerate the archive, update `sha256sums`
-with the output of `makepkg -g`, and refresh `.SRCINFO` with
-`makepkg --printsrcinfo > .SRCINFO`. Increment `pkgrel` before distributing an
-updated package. Source archives exclude local notes, tools, and test results.
+The [PKGBUILD](packaging/arch/PKGBUILD) packages the userspace driver. After
+editing packaged sources, regenerate the archive, update `sha256sums` using
+`makepkg -g`, and refresh `.SRCINFO` with `makepkg --printsrcinfo > .SRCINFO`.
 
-## Development
-
-C and C++ sources use the checked-in `.clang-format` configuration. Use
-**clang-format 22** for consistent results:
+Alternatively, build and install with Meson:
 
 ```sh
-clang-format -i src/*.c src/*.cpp src/*.hpp
-clang-format --dry-run --Werror src/*.c src/*.cpp src/*.hpp
+meson setup build --buildtype=release --prefix=/usr -Dlibdir=lib
+meson compile -C build
+sudo meson install -C build
 ```
 
-When clang-format is available at Meson configuration time, these targets are
-also available:
+Adjust `libdir` if your system uses a driver directory other than `/usr/lib/dri`.
+Installation adds the MSM driver alias, so **`LIBVA_DRIVER_NAME` is not required**
+on the target platform.
+
+To check the installation (`vainfo` comes from `libva-utils` on Arch):
 
 ```sh
-meson compile -C build format
-meson compile -C build format-check
+vainfo --display drm --device /dev/dri/renderD128
 ```
 
-Use `meson setup build -Dwerror=true` for a build that treats compiler warnings
-as errors. Hardware behavior must be validated on the target platform.
+## Usage
 
-The maintained tree contains the backend in `src/`, kernel patches in
-`patches/`, Arch recipes and snapshot tooling in `packaging/`, and VAAPI FITS
-capability declarations in `tests/`. Local research, diagnostic tools, and
-historical results live under the ignored `tmp/` directory and are not required
-to build or package the driver.
+Play a video with mpv:
+
+```sh
+mpv --hwdec=vaapi input.mp4
+```
+
+Encode to H.264 with FFmpeg:
+
+```sh
+ffmpeg -vaapi_device /dev/dri/renderD128 -i input.mp4 -an \
+  -vf format=nv12,hwupload -c:v h264_vaapi -profile:v high \
+  -bf 0 -g 60 -rc_mode CBR -b:v 6M -async_depth 4 output.mp4
+```
+
+For hardware decoding and encoding of a supported 8-bit input:
+
+```sh
+ffmpeg -hwaccel vaapi -hwaccel_device /dev/dri/renderD128 \
+  -hwaccel_output_format vaapi -i input.mp4 -an \
+  -c:v h264_vaapi -bf 0 -qp 24 -async_depth 4 output.mp4
+```
+
+MP4 and raw H.264 output are supported; for Matroska, encode to raw H.264 first
+and remux. FFmpeg may warn about unsupported packed headers because the firmware
+produces the headers. Custom VUI/SEI metadata is not forwarded.
+
+For GStreamer, set `GST_VA_ALL_DRIVERS=1` to enable this driver's `va` elements:
+
+```sh
+GST_VA_ALL_DRIVERS=1 gst-launch-1.0 -e \
+  videotestsrc num-buffers=120 ! \
+  video/x-raw,format=NV12,width=1920,height=1080,framerate=30/1 ! \
+  vah264enc rate-control=vbr bitrate=6000 target-percentage=100 \
+    b-frames=0 ref-frames=1 target-usage=1 key-int-max=60 ! \
+  'video/x-h264,profile=high' ! h264parse ! mp4mux ! filesink location=output.mp4
+```
+
+For Sunshine/Moonlight, use **H.264 / SDR**. HEVC and AV1 encoder probes may fail
+while H.264 remains available.
+
+## Configuration and development
+
+| Variable | Purpose |
+| --- | --- |
+| `LIBVA_DRIVER_NAME=v4l2` | Explicitly select this backend. |
+| `LIBVA_DRIVERS_PATH=/path/to/build` | Load an uninstalled build. |
+| `IRIS_VAAPI_DEVICE` / `IRIS_VAAPI_ENCODER_DEVICE` | Override automatic video-device discovery. |
+| `IRIS_VAAPI_COPY=gpu` or `cpu` | Select the copy path; default is `gpu`. |
+| `IRIS_VAAPI_DEBUG=1` | Enable diagnostics. |
+
+Use clang-format 22 and the checked-in `.clang-format`. Meson provides `format`
+and `format-check` targets when clang-format is available; `-Dwerror=true`
+enables compiler warnings as errors. Hardware tests and their run instructions
+are in [tests/](tests/). Local research and historical results live in ignored
+`tmp/` and are not required to build the driver.
 
 ## License
 
-The userspace backend is licensed under the [MIT License](LICENSE). The kernel
-patches follow the Linux files' GPL-2.0-only license. External test frameworks and
-media retain their respective licenses.
+The backend is [MIT licensed](LICENSE). Bundled Linux kernel patches are
+GPL-2.0-only; external test frameworks and media retain their own licenses.

@@ -2,6 +2,7 @@
 #pragma once
 #include <va/va.h>
 #include <va/va_backend.h>
+#include <va/va_backend_vpp.h>
 #include <va/va_drmcommon.h>
 #include <va/va_dec_hevc.h>
 #include <va/va_dec_vp9.h>
@@ -43,8 +44,9 @@ template <class... A> void trace(const char *f, A... a) {
         std::fprintf(stderr, "\n");
     }
 }
-enum class MemoryOrigin { Unknown, MsmWriteCombined, MsmCoherent, Iris };
+enum class MemoryOrigin { Unknown, MsmWriteCombined, MsmCoherent, DmaHeap, Imported, Iris };
 struct Memory {
+    std::shared_ptr<void> fastcv_registration;
     MemoryOrigin origin = MemoryOrigin::Unknown;
     int fd = -1;
     void *mapping = nullptr;
@@ -227,12 +229,29 @@ class Encoder {
 };
 void copy_surface(Memory &destination, Memory &source, unsigned width, unsigned height);
 void wait_surface_access(const Memory &memory, short events);
+bool vpp_supported(VAProfile profile, VAEntrypoint entrypoint);
+void vpp_caps(VAProcPipelineCaps &caps);
+struct VppPicture {
+    std::shared_ptr<Surface> source;
+    VARectangle region{};
+};
+class Vpp {
+    std::shared_ptr<void> runtime_;
+
+  public:
+    Vpp();
+    void scale(const VppPicture &picture, const std::shared_ptr<Surface> &target);
+};
+VppPicture vpp_picture(const Buffer &buffer, const std::shared_ptr<Surface> &source,
+                       const Surface &target);
 struct Context {
     VAProfile profile;
     VAEntrypoint entrypoint = VAEntrypointVLD;
     unsigned width, height;
     std::shared_ptr<Decoder> decoder;
     std::shared_ptr<Encoder> encoder;
+    std::unique_ptr<Vpp> vpp;
+    VppPicture vpp_picture;
     EncodeSettings encode_settings;
     EncodePicture encode_picture;
     std::shared_ptr<Surface> target;

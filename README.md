@@ -21,8 +21,9 @@ and Sunshine. HEVC encoding is tested with FFmpeg and GStreamer.
   3840×2160, and I/P frames with one reference. I-frame requests produce IDR frames; B frames
   are unsupported.
   HEVC encoding currently uses Main tier; Main10 encoding is not implemented.
-- Video processing (VPP), hardware scaling, and bit-depth conversion are not
-  implemented. Some streams and advanced codec features remain unsupported.
+- Optional FastCV VPP provides CDSP scaling for linear NV12 with DMA-BUF support.
+  Widths must be multiples of 16 and heights even. Color/bit-depth conversion
+  and other VPP filters are unsupported.
 - Compatible DMA-BUF paths avoid raw-frame copies. Applications that cache
   surfaces before decoding use a GPU copy by default.
 
@@ -56,6 +57,7 @@ and pipeline configuration.
 - Access to the Iris video devices and DRM render node.
 - A C++17 compiler, Meson ≥ 0.61, Ninja, pkg-config, and development libraries
   for libva, libdrm, EGL, GLES 3.2, and GBM.
+- For VPP: system FastCV and FastRPC libraries with a working CDSP runtime.
 
 ## Build and install
 
@@ -79,6 +81,10 @@ meson setup build --buildtype=release --prefix=/usr -Dlibdir=lib
 meson compile -C build
 sudo meson install -C build
 ```
+
+FastCV VPP defaults to `-Dfastcv=auto` (enabled when dependencies are available).
+Use `-Dfastcv=disabled` to disable it or `-Dfastcv=enabled` to require build dependencies.
+FastCV is loaded dynamically; missing runtime libraries disable only VPP.
 
 Adjust `libdir` if your system uses a driver directory other than `/usr/lib/dri`.
 Installation adds the MSM driver alias, so **`LIBVA_DRIVER_NAME` is not required**
@@ -119,6 +125,15 @@ ffmpeg -hwaccel vaapi -hwaccel_device /dev/dri/renderD128 \
 MP4 and raw H.264 output are supported; for Matroska, encode to raw H.264 first
 and remux. FFmpeg may warn about unsupported packed headers because the firmware
 produces the headers. Custom VUI/SEI metadata is not forwarded.
+
+Scale a decoded NV12 video on CDSP:
+
+```sh
+ffmpeg -hwaccel vaapi -hwaccel_device /dev/dri/renderD128 \
+  -hwaccel_output_format vaapi -i input.mp4 -an \
+  -vf scale_vaapi=w=1920:h=1080 -c:v h264_vaapi -bf 0 -qp 24 \
+  -async_depth 4 output.mp4
+```
 
 For GStreamer, set `GST_VA_ALL_DRIVERS=1` to enable this driver's `va` elements:
 

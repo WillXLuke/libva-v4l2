@@ -2,14 +2,16 @@
 # Local source snapshot: python packaging/make-dist.py
 pkgname=libva-v4l2
 pkgver=0.1.0
-pkgrel=19
+pkgrel=21
 pkgdesc='VA-API backend for Qualcomm Iris stateful V4L2 M2M decoding and H.264/HEVC encoding'
 arch=('aarch64')
 license=('MIT' 'GPL-2.0-only') # backend MIT; bundled Linux patch GPL-2.0-only
 depends=('glibc' 'gcc-libs' 'libva' 'libdrm' 'mesa' 'libglvnd')
 makedepends=('meson' 'ninja')
+optdepends=('qcom-fastcv-binaries: CDSP video scaling'
+            'qcom-fastrpc: CDSP video scaling')
 source=("$pkgname-$pkgver.tar.gz")
-sha256sums=('7eaaeb0992df8de7a8d91d731f42335aa1d9300a2e1dabcdd963c88eb29e9b97')
+sha256sums=('0a730ac96b80e0a92f407ec34345667a5d9783529b7485cedd6e77f6cb4591b3')
 
 build() {
   # make-dist.py fixes source mtimes to zero. Reusing Ninja objects from an

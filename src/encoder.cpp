@@ -810,7 +810,8 @@ std::shared_ptr<EncodeTask> Encoder::encode(const EncodeSettings &s, const Encod
         }
         const bool direct =
             e.import && memory->fd >= 0 &&
-            (memory->origin == MemoryOrigin::MsmCoherent || memory->origin == MemoryOrigin::Iris) &&
+            (memory->origin == MemoryOrigin::MsmCoherent || memory->origin == MemoryOrigin::Iris ||
+             memory->origin == MemoryOrigin::DmaHeap) &&
             memory->stride == e.stride && memory->storage_height == e.storage_height &&
             !memory->data_offset && memory->size >= e.input_size;
         if (!e.import) {

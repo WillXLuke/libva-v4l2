@@ -135,18 +135,34 @@ while H.264 remains available.
 | `IRIS_VAAPI_COPY=gpu` or `cpu` | Select the copy path; default is `gpu`. |
 | `IRIS_VAAPI_DEBUG=1` | Enable diagnostics. |
 
-CQP, CBR, and VBR rate control are supported directly; the firmware only
-exposes fixed-QP plus CBR/VBR controllers, so the remaining VA modes are
-emulated from those: ICQ runs the fixed-QP controller seeded from
-`ICQ_quality_factor`, QVBR runs VBR with `quality_factor` as its QP ceiling
-(bitrate may overshoot the target, as VA specifies), and AVBR runs CBR.
-VA quality levels
-(`VAEncMiscParameterBufferQualityLevel`, exposed to clients through
-`VAConfigAttribEncQualityRange = 4`) map to a maximum-QP ceiling for CBR/VBR:
-level 1 (best) caps QP at 30, levels 2-4 cap at 37, 44, and 51 (the default,
-unrestricted range). The firmware has no speed/quality preset, so only the QP
-budget changes; CQP is unaffected. Sunshine maps its VA-API quality setting
-to these levels and its rate-control setting to the modes above.
+## Rate control and quality
+
+All VA rate-control modes are accepted. The firmware exposes fixed-QP plus
+CBR/VBR controllers, so the remaining modes are emulated from those:
+
+| VA mode | Firmware behavior |
+| --- | --- |
+| CQP | Fixed QP from the picture QP (`-qp`). |
+| CBR | Constant bitrate controller. |
+| VBR | Variable bitrate with average and peak limits. |
+| QVBR | VBR with `quality_factor` as the maximum-QP ceiling. Bitrate may overshoot the target when the ceiling is hit, as VA specifies. |
+| ICQ | Fixed-QP controller seeded from `ICQ_quality_factor`; the firmware has no adaptive quality mode. |
+| AVBR | CBR; there is no separate average-bitrate controller or convergence window. |
+
+VA quality levels are advertised through `VAConfigAttribEncQualityRange = 4`
+and map to a maximum-QP ceiling for CBR/VBR; the firmware has no speed or
+quality preset, so only the QP budget changes. CQP and ICQ name their QP
+explicitly and are unaffected. Level 0 (default) leaves the range unrestricted.
+
+| Quality level | Maximum QP |
+| --- | --- |
+| 1 (best) | 30 |
+| 2 | 37 |
+| 3 | 44 |
+| 4 (fastest) | 51 |
+
+Sunshine maps its VA-API quality setting to these levels and its rate-control
+setting to the modes above.
 
 Use clang-format 22 and the checked-in `.clang-format`. Meson provides `format`
 and `format-check` targets when clang-format is available; `-Dwerror=true`

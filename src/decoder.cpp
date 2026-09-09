@@ -40,6 +40,7 @@ bool expired(std::chrono::steady_clock::time_point start) {
 }
 } // namespace
 Memory::~Memory() {
+    fastcv_registration.reset();
     if (mapping)
         munmap(mapping, size);
     if (fd >= 0)

@@ -2,14 +2,16 @@
 # Local source snapshot: python packaging/make-dist.py
 pkgname=libva-v4l2
 pkgver=0.1.0
-pkgrel=17
+pkgrel=21
 pkgdesc='VA-API backend for Qualcomm Iris stateful V4L2 M2M decoding and H.264/HEVC encoding'
 arch=('aarch64')
 license=('MIT' 'GPL-2.0-only') # backend MIT; bundled Linux patch GPL-2.0-only
 depends=('glibc' 'gcc-libs' 'libva' 'libdrm' 'mesa' 'libglvnd')
 makedepends=('meson' 'ninja')
+optdepends=('qcom-fastcv-binaries: CDSP video scaling'
+            'qcom-fastrpc: CDSP video scaling')
 source=("$pkgname-$pkgver.tar.gz")
-sha256sums=('3387999eba051c2aaabc047c777e059bcdd51dab0a4a10497fa1a6f2097221a4')
+sha256sums=('0a730ac96b80e0a92f407ec34345667a5d9783529b7485cedd6e77f6cb4591b3')
 
 build() {
   # make-dist.py fixes source mtimes to zero. Reusing Ninja objects from an
@@ -22,4 +24,16 @@ build() {
 package() {
   DESTDIR="$pkgdir" meson install -C "$srcdir/build" --no-rebuild
   cp -a "$srcdir/$pkgname-$pkgver/patches" "$pkgdir/usr/share/doc/$pkgname/"
+
+  # Enable and prefer GStreamer VA elements in user sessions and login shells.
+  local feature_rank='vah264dec:1000,vah264enc:1000,vah265dec:1000,vah265enc:1000,vavp9dec:1000'
+  install -d "$pkgdir/usr/lib/environment.d" "$pkgdir/etc/profile.d"
+  printf '%s\n' 'GST_VA_ALL_DRIVERS=1' \
+    "GST_PLUGIN_FEATURE_RANK=$feature_rank" \
+    > "$pkgdir/usr/lib/environment.d/60-libva-v4l2.conf"
+  printf '%s\n' 'export GST_VA_ALL_DRIVERS=1' \
+    "export GST_PLUGIN_FEATURE_RANK=$feature_rank" \
+    > "$pkgdir/etc/profile.d/libva-v4l2.sh"
+  chmod 644 "$pkgdir/usr/lib/environment.d/60-libva-v4l2.conf" \
+    "$pkgdir/etc/profile.d/libva-v4l2.sh"
 }

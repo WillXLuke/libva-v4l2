@@ -267,22 +267,34 @@ API(query_profiles, (VADriverContextP ctx, VAProfile *out, int *count), (void)d;
     out[0] = VAProfileH264ConstrainedBaseline; out[1] = VAProfileH264Main;
     out[2] = VAProfileH264High; out[3] = VAProfileHEVCMain; out[4] = VAProfileHEVCMain10;
     out[5] = VAProfileVP9Profile0; out[6] = VAProfileVP9Profile2; *count = 7;
+    if (vpp_supported(VAProfileNone, VAEntrypointVideoProc)) out[(*count)++] = VAProfileNone;
     return VA_STATUS_SUCCESS;)
 API(query_entrypoints, (VADriverContextP ctx, VAProfile profile, VAEntrypoint *out, int *count),
     (void)d;
-    check(supported(profile), "unsupported profile", VA_STATUS_ERROR_UNSUPPORTED_PROFILE);
+    check(supported(profile) || vpp_supported(profile, VAEntrypointVideoProc),
+          "unsupported profile", VA_STATUS_ERROR_UNSUPPORTED_PROFILE);
     check(out && count, "null entrypoints", VA_STATUS_ERROR_INVALID_PARAMETER);
-    out[0] = VAEntrypointVLD; *count = 1;
+    out[0] = profile == VAProfileNone ? VAEntrypointVideoProc : VAEntrypointVLD; *count = 1;
     if (encode_supported(d, profile, VAEntrypointEncSlice)) out[(*count)++] = VAEntrypointEncSlice;
     return VA_STATUS_SUCCESS;)
 API(
     get_attributes,
     (VADriverContextP ctx, VAProfile profile, VAEntrypoint entry, VAConfigAttrib *attrs, int count),
     (void)d;
-    check(supported(profile), "unsupported profile", VA_STATUS_ERROR_UNSUPPORTED_PROFILE);
-    check(entry == VAEntrypointVLD || encode_supported(d, profile, entry), "unsupported entrypoint",
-          VA_STATUS_ERROR_UNSUPPORTED_ENTRYPOINT);
+    check(supported(profile) || vpp_supported(profile, VAEntrypointVideoProc),
+          "unsupported profile", VA_STATUS_ERROR_UNSUPPORTED_PROFILE);
+    check((supported(profile) && entry == VAEntrypointVLD) || vpp_supported(profile, entry) ||
+              encode_supported(d, profile, entry),
+          "unsupported entrypoint", VA_STATUS_ERROR_UNSUPPORTED_ENTRYPOINT);
     for (int i = 0; i < count; ++i) {
+        if (entry == VAEntrypointVideoProc) {
+            attrs[i].value = attrs[i].type == VAConfigAttribRTFormat ? VA_RT_FORMAT_YUV420
+                             : (attrs[i].type == VAConfigAttribMaxPictureWidth ||
+                                attrs[i].type == VAConfigAttribMaxPictureHeight)
+                                 ? 8192
+                                 : VA_ATTRIB_NOT_SUPPORTED;
+            continue;
+        }
         if (entry == VAEntrypointEncSlice) {
             attrs[i].value = encode_attribute(attrs[i].type, profile);
             continue;
@@ -306,9 +318,11 @@ API(
     create_config,
     (VADriverContextP ctx, VAProfile p, VAEntrypoint e, VAConfigAttrib *attrs, int count,
      VAConfigID *id),
-    check(supported(p), "unsupported profile", VA_STATUS_ERROR_UNSUPPORTED_PROFILE);
-    check(e == VAEntrypointVLD || encode_supported(d, p, e), "unsupported entrypoint",
-          VA_STATUS_ERROR_UNSUPPORTED_ENTRYPOINT);
+    check(supported(p) || vpp_supported(p, VAEntrypointVideoProc), "unsupported profile",
+          VA_STATUS_ERROR_UNSUPPORTED_PROFILE);
+    check((supported(p) && e == VAEntrypointVLD) || vpp_supported(p, e) ||
+              encode_supported(d, p, e),
+          "unsupported entrypoint", VA_STATUS_ERROR_UNSUPPORTED_ENTRYPOINT);
     Config config{p, e, VA_RC_CQP}; check(id, "null config ID", VA_STATUS_ERROR_INVALID_PARAMETER);
     for (int i = 0; i < count; ++i) {
         if (e == VAEntrypointEncSlice) {
@@ -330,7 +344,7 @@ API(
         } else if (attrs[i].type == VAConfigAttribRTFormat)
             check(attrs[i].value == profile_format(p), "unsupported render format",
                   VA_STATUS_ERROR_UNSUPPORTED_RT_FORMAT);
-        else if (attrs[i].type == VAConfigAttribDecSliceMode)
+        else if (e == VAEntrypointVLD && attrs[i].type == VAConfigAttribDecSliceMode)
             check(attrs[i].value == VA_DEC_SLICE_MODE_NORMAL, "unsupported slice mode",
                   VA_STATUS_ERROR_ATTR_NOT_SUPPORTED);
         else
@@ -358,7 +372,11 @@ API(
                                    VASurfaceAttribMaxHeight, VASurfaceAttribMemoryType};
     unsigned values[] = {profile_fourcc(profile), 128, 128, 8192, 8192,
                          VA_SURFACE_ATTRIB_MEM_TYPE_VA};
-    if (config.entrypoint == VAEntrypointEncSlice) {
+    if (config.entrypoint == VAEntrypointVideoProc) {
+        values[1] = 16;
+        values[2] = 2;
+        values[5] |= VA_SURFACE_ATTRIB_MEM_TYPE_DRM_PRIME_2;
+    } if (config.entrypoint == VAEntrypointEncSlice) {
         values[3] = 3840;
         values[4] = 2160;
     } for (unsigned i = 0; i < 6; ++i) {
@@ -376,6 +394,58 @@ API(
         return VA_STATUS_ERROR_MAX_NUM_EXCEEDED;
     } std::memcpy(attrs, a, sizeof(a));
     *count = 6; return VA_STATUS_SUCCESS;)
+static std::shared_ptr<Memory> import_prime(const VADRMPRIMESurfaceDescriptor &desc, unsigned width,
+                                            unsigned height) {
+    check(desc.fourcc == VA_FOURCC_NV12 && desc.width == width && desc.height == height &&
+              desc.num_objects == 1 && desc.objects[0].fd >= 0 &&
+              desc.objects[0].drm_format_modifier == DRM_FORMAT_MOD_LINEAR,
+          "import requires single-object linear NV12", VA_STATUS_ERROR_INVALID_PARAMETER);
+    unsigned offsets[2]{}, pitches[2]{};
+    if (desc.num_layers == 1) {
+        const auto &l = desc.layers[0];
+        check(l.drm_format == DRM_FORMAT_NV12 && l.num_planes == 2 && !l.object_index[0] &&
+                  !l.object_index[1],
+              "invalid composed NV12 layer", VA_STATUS_ERROR_INVALID_PARAMETER);
+        for (unsigned i = 0; i < 2; ++i) {
+            offsets[i] = l.offset[i];
+            pitches[i] = l.pitch[i];
+        }
+    } else {
+        check(desc.num_layers == 2 && desc.layers[0].drm_format == DRM_FORMAT_R8 &&
+                  desc.layers[1].drm_format == DRM_FORMAT_GR88,
+              "invalid separate NV12 layers", VA_STATUS_ERROR_INVALID_PARAMETER);
+        for (unsigned i = 0; i < 2; ++i) {
+            const auto &l = desc.layers[i];
+            check(l.num_planes == 1 && !l.object_index[0], "invalid NV12 plane",
+                  VA_STATUS_ERROR_INVALID_PARAMETER);
+            offsets[i] = l.offset[0];
+            pitches[i] = l.pitch[0];
+        }
+    }
+    check(pitches[0] >= ((width + 1) & ~1u) && pitches[0] == pitches[1] &&
+              offsets[1] >= offsets[0] && (offsets[1] - offsets[0]) % pitches[0] == 0 &&
+              (offsets[1] - offsets[0]) / pitches[0] >= height &&
+              uint64_t(offsets[1]) + uint64_t((height + 1) / 2 - 1) * pitches[1] +
+                      ((width + 1) & ~1u) <=
+                  desc.objects[0].size,
+          "unsupported NV12 DMA-BUF plane layout", VA_STATUS_ERROR_INVALID_PARAMETER);
+    auto m = std::make_shared<Memory>();
+    m->fd = fcntl(desc.objects[0].fd, F_DUPFD_CLOEXEC, 0);
+    check(m->fd >= 0, "duplicate imported DMA-BUF");
+    // DMA-BUF llseek reports the real allocation length. Do not trust a descriptor
+    // that would let a subsequent mmap/DSP access extend beyond the allocation.
+    auto size = lseek(m->fd, 0, SEEK_END);
+    check(size >= 0 && uint64_t(size) >= desc.objects[0].size,
+          "DMA-BUF allocation smaller than descriptor", VA_STATUS_ERROR_INVALID_PARAMETER);
+    m->size = desc.objects[0].size;
+    m->width = width;
+    m->height = height;
+    m->stride = pitches[0];
+    m->storage_height = (offsets[1] - offsets[0]) / pitches[0];
+    m->data_offset = offsets[0];
+    m->origin = MemoryOrigin::Imported;
+    return m;
+}
 API(
     create_surfaces,
     (VADriverContextP ctx, unsigned format, unsigned w, unsigned h, VASurfaceID *ids,
@@ -384,9 +454,33 @@ API(
           "unsupported surface RT format", VA_STATUS_ERROR_UNSUPPORTED_RT_FORMAT);
     check(w && h && w <= 8192 && h <= 8192 && ids && count <= 256, "invalid surfaces",
           VA_STATUS_ERROR_INVALID_PARAMETER);
+    check(!nattrs || attrs, "null surface attributes", VA_STATUS_ERROR_INVALID_PARAMETER);
+    unsigned memory_type = VA_SURFACE_ATTRIB_MEM_TYPE_VA;
+    const VADRMPRIMESurfaceDescriptor *external = nullptr; bool explicit_modifier = false;
     for (unsigned i = 0; i < nattrs; ++i) {
         if (!(attrs[i].flags & VA_SURFACE_ATTRIB_SETTABLE))
             continue;
+#if VA_CHECK_VERSION(1, 13, 0)
+        if (attrs[i].type == VASurfaceAttribDRMFormatModifiers) {
+            check(attrs[i].value.type == VAGenericValueTypePointer && attrs[i].value.value.p,
+                  "invalid modifier list", VA_STATUS_ERROR_INVALID_PARAMETER);
+            const auto &list =
+                *static_cast<const VADRMFormatModifierList *>(attrs[i].value.value.p);
+            check(list.num_modifiers && list.modifiers &&
+                      std::find(list.modifiers, list.modifiers + list.num_modifiers,
+                                DRM_FORMAT_MOD_LINEAR) != list.modifiers + list.num_modifiers,
+                  "only linear surface allocation is supported",
+                  VA_STATUS_ERROR_ATTR_NOT_SUPPORTED);
+            explicit_modifier = true;
+            continue;
+        }
+#endif
+        if (attrs[i].type == VASurfaceAttribExternalBufferDescriptor) {
+            check(attrs[i].value.type == VAGenericValueTypePointer && attrs[i].value.value.p,
+                  "invalid external descriptor", VA_STATUS_ERROR_INVALID_PARAMETER);
+            external = static_cast<const VADRMPRIMESurfaceDescriptor *>(attrs[i].value.value.p);
+            continue;
+        }
         check(attrs[i].value.type == VAGenericValueTypeInteger, "unsupported surface attribute",
               VA_STATUS_ERROR_ATTR_NOT_SUPPORTED);
         if (attrs[i].type == VASurfaceAttribPixelFormat)
@@ -395,13 +489,23 @@ API(
                   "surface pixel format does not match RT format",
                   VA_STATUS_ERROR_UNSUPPORTED_RT_FORMAT);
         else if (attrs[i].type == VASurfaceAttribMemoryType)
-            check(attrs[i].value.value.i == VA_SURFACE_ATTRIB_MEM_TYPE_VA,
-                  "external surface import not implemented",
-                  VA_STATUS_ERROR_UNSUPPORTED_MEMORY_TYPE);
+            memory_type = attrs[i].value.value.i;
         else if (attrs[i].type != VASurfaceAttribUsageHint)
             throw Error(VA_STATUS_ERROR_ATTR_NOT_SUPPORTED, "unsupported surface attribute");
-    } for (unsigned i = 0; i < count; ++i) {
+    } check(memory_type == VA_SURFACE_ATTRIB_MEM_TYPE_VA ||
+                memory_type == VA_SURFACE_ATTRIB_MEM_TYPE_DRM_PRIME_2,
+            "unsupported surface memory type", VA_STATUS_ERROR_UNSUPPORTED_MEMORY_TYPE);
+    std::shared_ptr<Memory> imported; if (memory_type == VA_SURFACE_ATTRIB_MEM_TYPE_DRM_PRIME_2) {
+        check(external && !explicit_modifier && count == 1 && format == VA_RT_FORMAT_YUV420,
+              "PRIME2 import requires one NV12 descriptor/surface",
+              VA_STATUS_ERROR_INVALID_PARAMETER);
+        imported = import_prime(*external, w, h);
+    } else check(!external, "external descriptor without PRIME2 memory type",
+                 VA_STATUS_ERROR_INVALID_PARAMETER);
+    for (unsigned i = 0; i < count; ++i) {
         auto s = std::make_shared<Surface>();
+        s->memory = imported;
+        s->persistent_export = bool(imported);
         s->width = w;
         s->height = h;
         s->allocation_count = count;
@@ -420,12 +524,13 @@ API(create_context,
     (VADriverContextP ctx, VAConfigID id, int w, int h, int flags, VASurfaceID *targets, int count,
      VAContextID *result),
     (void)flags;
-    check(w >= 128 && h >= 128 && w <= 8192 && h <= 8192 && result, "invalid context dimensions",
-          VA_STATUS_ERROR_RESOLUTION_NOT_SUPPORTED);
-    auto c = std::make_shared<Context>();
     auto config = lookup(d.configs, id, VA_STATUS_ERROR_INVALID_CONFIG);
-    c->profile = config.profile; c->entrypoint = config.entrypoint;
-    c->encode_settings.rate_control = config.rate_control;
+    bool processing = config.entrypoint == VAEntrypointVideoProc;
+    check(((processing && w >= 0 && h >= 0) || (w >= 128 && h >= 128)) && w <= 8192 && h <= 8192 &&
+              result,
+          "invalid context dimensions", VA_STATUS_ERROR_RESOLUTION_NOT_SUPPORTED);
+    auto c = std::make_shared<Context>(); c->profile = config.profile;
+    c->entrypoint = config.entrypoint; c->encode_settings.rate_control = config.rate_control;
     c->encode_settings.hevc = is_hevc(c->profile); if (c->entrypoint == VAEntrypointEncSlice)
         check(w <= 3840 && h <= 2160 && !(w & 1) && !(h & 1), "unsupported encoder dimensions",
               VA_STATUS_ERROR_RESOLUTION_NOT_SUPPORTED);
@@ -434,7 +539,8 @@ API(create_context,
     if (c->entrypoint == VAEntrypointVLD)
         c->decoder = std::make_shared<Decoder>(d.device, w, h, std::max(0, count), c->profile,
                                                render_fd);
-    *result = d.next_id++; d.contexts[*result] = c; return VA_STATUS_SUCCESS;)
+    if (processing) c->vpp = std::make_unique<Vpp>(); *result = d.next_id++;
+    d.contexts[*result] = c; return VA_STATUS_SUCCESS;)
 API(
     destroy_context, (VADriverContextP ctx, VAContextID id), auto c = context(d, id);
     d.contexts.erase(id); if (c->encoder) c->encoder->finish();
@@ -454,7 +560,8 @@ API(create_buffer,
     check(result && size && count && uint64_t(size) * count <= 64 * 1024 * 1024,
           "invalid buffer size", VA_STATUS_ERROR_INVALID_PARAMETER);
     bool encoding = c->entrypoint == VAEntrypointEncSlice;
-    check(encoding
+    check(c->entrypoint == VAEntrypointVideoProc ? type == VAProcPipelineParameterBufferType
+          : encoding
               ? (type == VAEncSequenceParameterBufferType ||
                  type == VAEncPictureParameterBufferType || type == VAEncSliceParameterBufferType ||
                  type == VAEncMiscParameterBufferType || type == VAEncCodedBufferType)
@@ -507,6 +614,13 @@ API(
         check(bool(s->memory), "encode input has no image data", VA_STATUS_ERROR_INVALID_SURFACE);
         c->target = s;
         c->encode_picture = EncodePicture{};
+        return VA_STATUS_SUCCESS;
+    } if (c->entrypoint == VAEntrypointVideoProc) {
+        check(!s->acquired_handles && !s->mapped_images, "VPP target is in use",
+              VA_STATUS_ERROR_SURFACE_BUSY);
+        s->status = VA_STATUS_SUCCESS;
+        c->target = s;
+        c->vpp_picture = {};
         return VA_STATUS_SUCCESS;
     } if (!s->persistent_export) s->memory.reset();
     s->status = VA_STATUS_SUCCESS; s->decoder = c->decoder; c->target = s; c->picture = Picture{};
@@ -565,7 +679,17 @@ API(
     auto c = context(d, id);
     check(bool(c->target), "no open picture"); for (int i = 0; i < count; ++i) {
         auto b = buffer(d, ids[i]);
-        if (c->entrypoint == VAEntrypointEncSlice) {
+        if (c->entrypoint == VAEntrypointVideoProc) {
+            check(b->context_id == id && b->type == VAProcPipelineParameterBufferType &&
+                      b->element_size >= sizeof(VAProcPipelineParameterBuffer) && b->elements == 1,
+                  "invalid VPP pipeline buffer", VA_STATUS_ERROR_INVALID_BUFFER);
+            check(!c->vpp_picture.source, "VPP supports one source per picture",
+                  VA_STATUS_ERROR_UNIMPLEMENTED);
+            VAProcPipelineParameterBuffer params{};
+            std::memcpy(&params, b->data.data(), sizeof(params));
+            auto source = surface(d, params.surface);
+            c->vpp_picture = vpp_picture(*b, source, *c->target);
+        } else if (c->entrypoint == VAEntrypointEncSlice) {
             check(b->context_id == id, "encode buffer belongs to another context",
                   VA_STATUS_ERROR_INVALID_BUFFER);
             render_encode_buffer(c->encode_settings, c->encode_picture, *b);
@@ -579,7 +703,24 @@ API(
 API(
     end_picture, (VADriverContextP ctx, VAContextID id), auto c = context(d, id);
     check(bool(c->target), "no open picture"); auto target = c->target; c->target.reset();
-    if (c->entrypoint == VAEntrypointEncSlice) {
+    if (c->entrypoint == VAEntrypointVideoProc) {
+        auto picture = std::move(c->vpp_picture);
+        c->vpp_picture = {};
+        check(bool(picture.source), "VPP pipeline parameters missing",
+              VA_STATUS_ERROR_INVALID_PARAMETER);
+        synchronize(d, picture.source);
+        synchronize(d, target);
+        check(!picture.source->mapped_images && !picture.source->acquired_handles &&
+                  !target->derived_images && !target->acquired_handles,
+              "VPP surface is in use", VA_STATUS_ERROR_SURFACE_BUSY);
+        try {
+            c->vpp->scale(picture, target);
+        } catch (const Error &e) {
+            target->status = e.status;
+            throw;
+        }
+        return VA_STATUS_SUCCESS;
+    } if (c->entrypoint == VAEntrypointEncSlice) {
         check(c->encode_picture.has_params, "missing encode picture",
               VA_STATUS_ERROR_INVALID_PARAMETER);
         auto coded = buffer(d, c->encode_picture.coded_buffer(c->encode_settings.hevc));
@@ -791,12 +932,14 @@ API(
           VA_STATUS_ERROR_UNSUPPORTED_MEMORY_TYPE);
     auto s = surface(d, id); synchronize(d, s);
     // GPU producers such as Sunshine render into exported encoder input.
-    // Only our independent GEM storage is writable: Iris CAPTURE allocations
+    // Independent storage is writable: Iris CAPTURE allocations
     // may still be decoder references and have cached CPU aliases.
     check(!(flags & VA_EXPORT_SURFACE_WRITE_ONLY) || !s->memory ||
               s->memory->origin == MemoryOrigin::MsmCoherent ||
-              s->memory->origin == MemoryOrigin::MsmWriteCombined,
-          "writable export requires independent GEM storage", VA_STATUS_ERROR_UNIMPLEMENTED);
+              s->memory->origin == MemoryOrigin::MsmWriteCombined ||
+              s->memory->origin == MemoryOrigin::DmaHeap ||
+              s->memory->origin == MemoryOrigin::Imported,
+          "writable export requires independent storage", VA_STATUS_ERROR_UNIMPLEMENTED);
     if (!s->memory) s->memory = allocate_undecoded_surface(ctx, *s); auto m = s->memory;
     auto &desc = *static_cast<VADRMPRIMESurfaceDescriptor *>(out); desc = {};
     desc.fourcc = m->fourcc; desc.width = s->width; desc.height = s->height; desc.num_objects = 1;
@@ -827,6 +970,28 @@ API(
         desc.layers[0].offset[1] = m->data_offset + m->stride * m->storage_height;
     } return VA_STATUS_SUCCESS;)
 
+API(query_vpp_filters,
+    (VADriverContextP ctx, VAContextID id, VAProcFilterType *filters, unsigned *count),
+    check(context(d, id)->entrypoint == VAEntrypointVideoProc, "not a VPP context",
+          VA_STATUS_ERROR_INVALID_CONTEXT);
+    (void)filters; check(count, "null filter count", VA_STATUS_ERROR_INVALID_PARAMETER); *count = 0;
+    return VA_STATUS_SUCCESS;)
+API(query_vpp_filter_caps,
+    (VADriverContextP ctx, VAContextID id, VAProcFilterType type, void *caps, unsigned *count),
+    check(context(d, id)->entrypoint == VAEntrypointVideoProc, "not a VPP context",
+          VA_STATUS_ERROR_INVALID_CONTEXT);
+    (void)type; (void)caps;
+    check(count, "null filter caps count", VA_STATUS_ERROR_INVALID_PARAMETER); *count = 0;
+    return VA_STATUS_ERROR_UNSUPPORTED_FILTER;)
+API(query_vpp_caps,
+    (VADriverContextP ctx, VAContextID id, VABufferID *filters, unsigned count,
+     VAProcPipelineCaps *caps),
+    check(context(d, id)->entrypoint == VAEntrypointVideoProc, "not a VPP context",
+          VA_STATUS_ERROR_INVALID_CONTEXT);
+    (void)filters; check(caps, "null pipeline caps", VA_STATUS_ERROR_INVALID_PARAMETER);
+    check(!count, "VPP filters unsupported", VA_STATUS_ERROR_UNSUPPORTED_FILTER); vpp_caps(*caps);
+    return VA_STATUS_SUCCESS;)
+
 static VAStatus terminate(VADriverContextP ctx) {
     delete static_cast<Driver *>(ctx->pDriverData);
     ctx->pDriverData = nullptr;
@@ -842,7 +1007,7 @@ extern "C" VAStatus __vaDriverInit_1_0(VADriverContextP ctx) {
         d->encoder_device = find_encoder_device();
         ctx->version_major = VA_MAJOR_VERSION;
         ctx->version_minor = VA_MINOR_VERSION;
-        ctx->max_profiles = 7;
+        ctx->max_profiles = 8;
         ctx->max_entrypoints = 2;
         ctx->max_attributes = 16;
         // libva validates nonzero allocation bounds even when queries return no entries.
@@ -851,6 +1016,13 @@ extern "C" VAStatus __vaDriverInit_1_0(VADriverContextP ctx) {
         ctx->max_display_attributes = 1;
         ctx->str_vendor = "Iris V4L2 stateful VA-API backend";
         auto &v = *ctx->vtable;
+        if (ctx->vtable_vpp && vpp_supported(VAProfileNone, VAEntrypointVideoProc)) {
+            auto &vpp = *ctx->vtable_vpp;
+            vpp.version = VA_DRIVER_VTABLE_VPP_VERSION;
+            vpp.vaQueryVideoProcFilters = query_vpp_filters;
+            vpp.vaQueryVideoProcFilterCaps = query_vpp_filter_caps;
+            vpp.vaQueryVideoProcPipelineCaps = query_vpp_caps;
+        }
         v.vaTerminate = terminate;
         v.vaQueryConfigProfiles = query_profiles;
         v.vaQueryConfigEntrypoints = query_entrypoints;

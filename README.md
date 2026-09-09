@@ -1,7 +1,11 @@
+**Note**
+VA-API rate control and quality control unvalidated.
+Debian package ready to use:https://github.com/WillXLuke/libva-v4l2/releases/tag/0.1.0
+
 # libva-v4l2
 
 A VA-API backend for Qualcomm Iris, using the Linux V4L2 stateful M2M interface.
-It provides hardware video decoding and H.264/HEVC encoding on **SC8280XP**, tested on
+It provides hardware video decoding and H.264/HEVC encoding on **SC8280XP/8cx Gen3**, tested on
 **Radxa Dragon Q8B**. The project is experimental and targets this platform;
 it is not a generic backend for all V4L2 devices.
 

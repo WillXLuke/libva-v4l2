@@ -51,6 +51,18 @@ The [PKGBUILD](packaging/arch/PKGBUILD) packages the userspace driver. After
 editing packaged sources, regenerate the archive, update `sha256sums` using
 `makepkg -g`, and refresh `.SRCINFO` with `makepkg --printsrcinfo > .SRCINFO`.
 
+On Debian or Ubuntu:
+
+```sh
+sudo apt install -y build-essential debhelper meson ninja-build pkg-config \
+  libva-dev libdrm-dev libegl1-mesa-dev libgles-dev libgbm-dev
+./build.sh
+sudo apt install -y ./output/libva-v4l2_*_arm64.deb
+```
+
+`build.sh` runs `dpkg-buildpackage -us -uc -b` and collects the packages in
+`output/`.
+
 Alternatively, build and install with Meson:
 
 ```sh
@@ -122,6 +134,19 @@ while H.264 remains available.
 | `IRIS_VAAPI_DEVICE` / `IRIS_VAAPI_ENCODER_DEVICE` | Override automatic video-device discovery. |
 | `IRIS_VAAPI_COPY=gpu` or `cpu` | Select the copy path; default is `gpu`. |
 | `IRIS_VAAPI_DEBUG=1` | Enable diagnostics. |
+
+CQP, CBR, and VBR rate control are supported directly; the firmware only
+exposes fixed-QP plus CBR/VBR controllers, so the remaining VA modes are
+emulated from those: ICQ runs the fixed-QP controller seeded from
+`ICQ_quality_factor`, QVBR runs VBR with `quality_factor` as its QP ceiling
+(bitrate may overshoot the target, as VA specifies), and AVBR runs CBR.
+VA quality levels
+(`VAEncMiscParameterBufferQualityLevel`, exposed to clients through
+`VAConfigAttribEncQualityRange = 4`) map to a maximum-QP ceiling for CBR/VBR:
+level 1 (best) caps QP at 30, levels 2-4 cap at 37, 44, and 51 (the default,
+unrestricted range). The firmware has no speed/quality preset, so only the QP
+budget changes; CQP is unaffected. Sunshine maps its VA-API quality setting
+to these levels and its rate-control setting to the modes above.
 
 Use clang-format 22 and the checked-in `.clang-format`. Meson provides `format`
 and `format-check` targets when clang-format is available; `-Dwerror=true`

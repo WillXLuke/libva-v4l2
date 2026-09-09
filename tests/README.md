@@ -2,20 +2,24 @@
 
 Run on the supported Iris board. These are hardware integration tests, not host
 unit tests. C/C++ files include build commands in their headers; FFmpeg tests
-also require `ffprobe` and software H.264 decoding.
+also require `ffprobe` and software H.264/HEVC decoding.
 
 | Test | Coverage |
 | --- | --- |
 | `encoder/ffmpeg-smoke.py` | Profiles, rate control, dimensions, frame counts, keyframes, and decoded quality. |
 | `encoder/api-smoke.cpp` | Uploads, direct/staged input, rejected requests, coded buffers, and resource cleanup. |
-| `encoder/async.cpp` | Queued versus serial output, QP/IDR changes, synchronization, timeouts, and pending resource destruction. |
-| `encoder/writable-export.cpp` | GPU-written input, stable DMA-BUF exports, and GPU fence synchronization. |
+| `encoder/async.cpp` | Queued versus serial output, QP/IDR changes, non-IDR I requests, synchronization, timeouts, and pending resource destruction. |
+| `encoder/writable-export.cpp` | GPU-written input, stable DMA-BUF exports, and GPU fence synchronization across non-IDR GOPs. |
 
 To select an uninstalled driver before running a test:
 
 ```sh
 export LIBVA_DRIVER_NAME=v4l2 LIBVA_DRIVERS_PATH="$PWD/build"
 ```
+
+The FFmpeg, async, and writable-export tests accept `--hevc` to exercise HEVC
+Main instead of H.264. The HEVC async test also checks rejected picture types,
+tiles, partial slices, invalid QP/filter values, and long-term references.
 
 Place generated streams and logs under `tmp/`. The async and writable-export
 programs take an existing output directory as their first argument.

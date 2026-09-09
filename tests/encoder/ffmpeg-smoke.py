@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: MIT
-"""Hardware H.264 encode smoke test; uses the selected libva driver.
+"""Hardware H.264/HEVC encode smoke test; uses the selected libva driver.
 
 Run on the Iris board: python3 tests/encoder/ffmpeg-smoke.py /path/to/results
 Set LIBVA_DRIVER_NAME and LIBVA_DRIVERS_PATH to test an uninstalled build.
-Requires FFmpeg with h264_vaapi and software H.264 decoding, plus ffprobe.
+Add --hevc to test HEVC Main. Requires FFmpeg VA encoding/software decoding and ffprobe.
 """
 import json
 import os
@@ -17,6 +17,7 @@ import time
 root = Path(sys.argv[1]).resolve()
 root.mkdir(parents=True, exist_ok=True)
 summary = []
+codec = 'hevc' if '--hevc' in sys.argv[2:] else 'h264'
 
 def run(args, name, timeout=90, env=None):
     start = time.monotonic()
@@ -36,7 +37,14 @@ cases = [
     ('1080p', 1920, 1080, 'high', ['-qp', '24'], 120, 'mp4'),
     ('4k', 3840, 2160, 'high', ['-qp', '24'], 60, 'mp4'),
     ('one-frame', 128, 128, 'high', ['-qp', '24'], 1, 'mp4'),
+    ('non-idr-gops', 640, 480, 'high',
+     ['-rc_mode', 'CBR', '-b:v', '2M', '-idr_interval', '2147483647', '-async_depth', '4'],
+     90, 'mp4'),
 ]
+if codec == 'hevc':
+    cases = [(name.replace('high-', 'main-'), w, h, 'main', rc, frames, container)
+             for name, w, h, profile, rc, frames, container in cases
+             if name != 'baseline-cqp']
 for name, w, h, profile, rc, frames, container in cases:
     raw = root / f'{w}x{h}-{frames}.nv12'
     if not raw.exists():
@@ -47,7 +55,7 @@ for name, w, h, profile, rc, frames, container in cases:
     output = root / (name + '.' + container)
     _, elapsed = run(['ffmpeg', '-nostdin', '-v', 'verbose', '-vaapi_device', '/dev/dri/renderD128',
         '-f', 'rawvideo', '-pixel_format', 'nv12', '-video_size', f'{w}x{h}', '-framerate', '30',
-        '-i', str(raw), '-vf', 'hwupload', '-c:v', 'h264_vaapi', '-profile:v', profile,
+        '-i', str(raw), '-vf', 'hwupload', '-c:v', codec + '_vaapi', '-profile:v', profile,
         '-bf', '0', '-g', '30', *rc, '-frames:v', str(frames), '-y', str(output)], name, env=env)
     info, _ = run(['ffprobe', '-v', 'error', '-select_streams', 'v:0', '-count_frames',
         '-show_entries', 'stream=codec_name,profile,width,height,nb_read_frames,extradata_size:frame=key_frame,pict_type',
@@ -55,7 +63,7 @@ for name, w, h, profile, rc, frames, container in cases:
     info = json.loads(info)
     stream = info['streams'][0]
     assert (stream['width'], stream['height'], int(stream['nb_read_frames'])) == (w, h, frames), info
-    assert stream['codec_name'] == 'h264', info
+    assert stream['codec_name'] == codec, info
     assert stream['profile'] == {'constrained_baseline': 'Constrained Baseline', 'main': 'Main', 'high': 'High'}[profile], info
     assert sum(f['key_frame'] for f in info['frames']) == (frames + 29) // 30, info
     assert all(f['pict_type'] in ('I', 'P') for f in info['frames']), info

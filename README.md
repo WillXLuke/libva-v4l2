@@ -1,7 +1,7 @@
 # libva-v4l2
 
 A VA-API backend for Qualcomm Iris, using the Linux V4L2 stateful M2M interface.
-It provides hardware video decoding and H.264 encoding on **SC8280XP**, tested on
+It provides hardware video decoding and H.264/HEVC encoding on **SC8280XP**, tested on
 **Radxa Dragon Q8B**. The project is experimental and targets this platform;
 it is not a generic backend for all V4L2 devices.
 
@@ -10,15 +10,17 @@ it is not a generic backend for all V4L2 devices.
 | Codec | Decoding | Encoding |
 | --- | --- | --- |
 | H.264 / AVC | Constrained Baseline, Main, High (8-bit) | Same profiles (8-bit) |
-| H.265 / HEVC | Main, Main10 (8/10-bit) | — |
+| H.265 / HEVC | Main, Main10 (8/10-bit) | Main (8-bit) |
 | VP9 | Profiles 0 and 2 (8/10-bit) | — |
 
 Supported video is progressive 4:2:0. Decoding has been tested with FFmpeg,
 GStreamer, mpv, VLC, Chromium, and Kodi; H.264 encoding with FFmpeg, GStreamer,
-and Sunshine.
+and Sunshine. HEVC encoding is tested with FFmpeg and GStreamer.
 
-- H.264 encoding supports CQP, CBR, and VBR, even dimensions from 128×128 to
-  3840×2160, and IDR/P frames with one reference. B frames are unsupported.
+- H.264 and HEVC encoding support CQP, CBR, and VBR, even dimensions from 128×128 to
+  3840×2160, and I/P frames with one reference. I-frame requests produce IDR frames; B frames
+  are unsupported.
+  HEVC encoding currently uses Main tier; Main10 encoding is not implemented.
 - Video processing (VPP), hardware scaling, and bit-depth conversion are not
   implemented. Some streams and advanced codec features remain unsupported.
 - Compatible DMA-BUF paths avoid raw-frame copies. Applications that cache
@@ -82,6 +84,8 @@ ffmpeg -vaapi_device /dev/dri/renderD128 -i input.mp4 -an \
   -vf format=nv12,hwupload -c:v h264_vaapi -profile:v high \
   -bf 0 -g 60 -rc_mode CBR -b:v 6M -async_depth 4 output.mp4
 ```
+
+For HEVC, use `-c:v hevc_vaapi -profile:v main` in the command above.
 
 For hardware decoding and encoding of a supported 8-bit input:
 

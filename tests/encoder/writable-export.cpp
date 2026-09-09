@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: MIT
 // GPU producer regression matching Sunshine: writable PRIME2 export, R8/GR88
-// render targets, glFlush (no glFinish), then H.264 VAAPI encoding.
+// render targets, glFlush (no glFinish), then H.264/HEVC VAAPI encoding.
 // c++ -std=c++17 writable-export.cpp -o writable-export $(pkg-config --cflags --libs \
 //   libavcodec libavutil libva libdrm gbm egl glesv2)
-// Usage: writable-export OUTPUT_DIRECTORY [WIDTH HEIGHT FRAMES]
+// Usage: writable-export OUTPUT_DIRECTORY [WIDTH HEIGHT FRAMES] [--hevc]
 extern "C" {
 #include <libavcodec/avcodec.h>
 #include <libavutil/hwcontext.h>
@@ -24,6 +24,8 @@ extern "C" {
 #include <cstring>
 #include <string>
 #include <vector>
+
+static bool hevc = false;
 
 static void require(bool value, const char *message) {
     if (!value) {
@@ -159,8 +161,8 @@ static std::vector<unsigned char> encode(AVBufferRef *device, Gpu *gpu, unsigned
     hw->height = h;
     hw->initial_pool_size = 8;
     avcheck(av_hwframe_ctx_init(frames));
-    const AVCodec *codec = avcodec_find_encoder_by_name("h264_vaapi");
-    require(codec, "h264_vaapi encoder");
+    const AVCodec *codec = avcodec_find_encoder_by_name(hevc ? "hevc_vaapi" : "h264_vaapi");
+    require(codec, "VAAPI encoder");
     auto *ctx = avcodec_alloc_context3(codec);
     require(ctx, "allocate encoder");
     ctx->width = w;
@@ -171,11 +173,13 @@ static std::vector<unsigned char> encode(AVBufferRef *device, Gpu *gpu, unsigned
     ctx->gop_size = 30;
     ctx->max_b_frames = 0;
     ctx->refs = 1;
-    ctx->profile = AV_PROFILE_H264_HIGH;
+    ctx->profile = hevc ? AV_PROFILE_HEVC_MAIN : AV_PROFILE_H264_HIGH;
     ctx->bit_rate = 20000000;
     ctx->hw_frames_ctx = av_buffer_ref(frames);
     avcheck(av_opt_set(ctx->priv_data, "rc_mode", "CBR", 0));
     avcheck(av_opt_set_int(ctx->priv_data, "async_depth", 4, 0));
+    // Sunshine uses multiple GOPs per IDR. Exercise GPU input at CRA/I boundaries.
+    avcheck(av_opt_set_int(ctx->priv_data, "idr_interval", 2147483647, 0));
     avcheck(avcodec_open2(ctx, codec, nullptr));
     auto *va_device = reinterpret_cast<AVVAAPIDeviceContext *>(
         reinterpret_cast<AVHWDeviceContext *>(device->data)->hwctx);
@@ -227,6 +231,10 @@ static std::vector<unsigned char> encode(AVBufferRef *device, Gpu *gpu, unsigned
     return bytes;
 }
 int main(int argc, char **argv) {
+    if (argc > 1 && !std::strcmp(argv[argc - 1], "--hevc")) {
+        hevc = true;
+        --argc;
+    }
     if (argc != 2 && argc != 5)
         return 2;
     unsigned w = argc == 5 ? std::atoi(argv[2]) : 640;
@@ -240,7 +248,8 @@ int main(int argc, char **argv) {
     auto cpu = encode(device, nullptr, w, h, frames);
     auto rendered = encode(device, &gpu, w, h, frames);
     require(cpu == rendered, "GPU-written and CPU-uploaded bitstreams differ");
-    auto *file = std::fopen((std::string(argv[1]) + "/writable.h264").c_str(), "wb");
+    auto *file = std::fopen(
+        (std::string(argv[1]) + (hevc ? "/writable.hevc" : "/writable.h264")).c_str(), "wb");
     require(file && std::fwrite(rendered.data(), 1, rendered.size(), file) == rendered.size(),
             "write");
     require(!std::fclose(file), "close output");

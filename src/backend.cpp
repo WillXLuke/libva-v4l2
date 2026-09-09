@@ -92,10 +92,33 @@ static bool supported(VAProfile p) {
 static bool encode_supported(const Driver &d, VAProfile p, VAEntrypoint e) {
     return !d.encoder_device.empty() && e == VAEntrypointEncSlice &&
            (p == VAProfileH264ConstrainedBaseline || p == VAProfileH264Main ||
-            p == VAProfileH264High);
+            p == VAProfileH264High || p == VAProfileHEVCMain);
 }
-static unsigned encode_attribute(VAConfigAttribType type) {
+static unsigned encode_attribute(VAConfigAttribType type, VAProfile profile) {
+    (void)profile; // HEVC attributes are only available in libva >= 1.13.
     switch (type) {
+#if VA_CHECK_VERSION(1, 13, 0)
+    case VAConfigAttribEncHEVCFeatures: {
+        if (profile != VAProfileHEVCMain)
+            return VA_ATTRIB_NOT_SUPPORTED;
+        // Iris generates the parameter sets and chooses coding tools itself.
+        VAConfigAttribValEncHEVCFeatures features{};
+        features.bits.sao = VA_FEATURE_REQUIRED;
+        features.bits.temporal_mvp = VA_FEATURE_REQUIRED;
+        features.bits.cu_qp_delta = VA_FEATURE_SUPPORTED;
+        features.bits.deblocking_filter_disable = VA_FEATURE_SUPPORTED;
+        return features.value;
+    }
+    case VAConfigAttribEncHEVCBlockSizes: {
+        if (profile != VAProfileHEVCMain)
+            return VA_ATTRIB_NOT_SUPPORTED;
+        VAConfigAttribValEncHEVCBlockSizes sizes{};
+        sizes.bits.log2_max_coding_tree_block_size_minus3 = 2;
+        sizes.bits.log2_min_coding_tree_block_size_minus3 = 2;
+        sizes.bits.log2_max_luma_transform_block_size_minus2 = 3;
+        return sizes.value;
+    }
+#endif
     case VAConfigAttribRTFormat:
         return VA_RT_FORMAT_YUV420;
     case VAConfigAttribRateControl:
@@ -258,7 +281,7 @@ API(
           VA_STATUS_ERROR_UNSUPPORTED_ENTRYPOINT);
     for (int i = 0; i < count; ++i) {
         if (entry == VAEntrypointEncSlice) {
-            attrs[i].value = encode_attribute(attrs[i].type);
+            attrs[i].value = encode_attribute(attrs[i].type, profile);
             continue;
         }
         switch (attrs[i].type) {
@@ -290,7 +313,7 @@ API(
             check(type == VAConfigAttribRTFormat || type == VAConfigAttribRateControl ||
                       type == VAConfigAttribEncPackedHeaders || type == VAConfigAttribEncInterlaced,
                   "unsupported encoder config attribute", VA_STATUS_ERROR_ATTR_NOT_SUPPORTED);
-            auto value = encode_attribute(type);
+            auto value = encode_attribute(type, p);
             check(!(attrs[i].value & ~value) &&
                       (type != VAConfigAttribRTFormat || attrs[i].value == VA_RT_FORMAT_YUV420),
                   "unsupported encoder attribute", VA_STATUS_ERROR_ATTR_NOT_SUPPORTED);
@@ -399,7 +422,7 @@ API(create_context,
     auto config = lookup(d.configs, id, VA_STATUS_ERROR_INVALID_CONFIG);
     c->profile = config.profile; c->entrypoint = config.entrypoint;
     c->encode_settings.rate_control = config.rate_control;
-    if (c->entrypoint == VAEntrypointEncSlice)
+    c->encode_settings.hevc = is_hevc(c->profile); if (c->entrypoint == VAEntrypointEncSlice)
         check(w <= 3840 && h <= 2160 && !(w & 1) && !(h & 1), "unsupported encoder dimensions",
               VA_STATUS_ERROR_RESOLUTION_NOT_SUPPORTED);
     for (int i = 0; i < count; ++i) surface(d, targets[i]); c->width = w; c->height = h;
@@ -555,16 +578,19 @@ API(
     if (c->entrypoint == VAEntrypointEncSlice) {
         check(c->encode_picture.has_params, "missing encode picture",
               VA_STATUS_ERROR_INVALID_PARAMETER);
-        auto coded = buffer(d, c->encode_picture.params.coded_buf);
+        auto coded = buffer(d, c->encode_picture.coded_buffer(c->encode_settings.hevc));
         check(coded->type == VAEncCodedBufferType && coded->context_id == id,
               "invalid encode output buffer", VA_STATUS_ERROR_INVALID_BUFFER);
-        auto reconstruction = surface(d, c->encode_picture.params.CurrPic.picture_id);
+        auto reconstruction = surface(d, c->encode_picture.reconstruction(c->encode_settings.hevc));
         synchronize_encode(reconstruction->encode_task);
         if (!c->encoder) {
             check(ctx->drm_state, "encoding requires a DRM display");
             c->encoder = std::make_shared<Encoder>(
-                d.encoder_device, c->width, c->height, c->profile, c->encode_settings,
-                c->encode_picture, static_cast<drm_state *>(ctx->drm_state)->fd);
+                d.encoder_device,
+                c->encode_settings.hevc ? std::min(c->width, target->width) : c->width,
+                c->encode_settings.hevc ? std::min(c->height, target->height) : c->height,
+                c->profile, c->encode_settings, c->encode_picture,
+                static_cast<drm_state *>(ctx->drm_state)->fd);
         }
         auto task = c->encoder->encode(c->encode_settings, c->encode_picture, target, coded);
         task->encoder = c->encoder;

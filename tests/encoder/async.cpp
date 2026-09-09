@@ -1,9 +1,10 @@
 // SPDX-License-Identifier: MIT
 // Board test: c++ -std=c++17 async.cpp -lva -lva-drm -o async
-// Usage: async OUTPUT_DIRECTORY (must already exist)
+// Usage: async OUTPUT_DIRECTORY [--hevc] (directory must already exist)
 #include <va/va.h>
 #include <va/va_drm.h>
 #include <va/va_enc_h264.h>
+#include <va/va_enc_hevc.h>
 #include <fcntl.h>
 #include <unistd.h>
 #include <dirent.h>
@@ -14,6 +15,8 @@
 #include <vector>
 #include <thread>
 #include <chrono>
+
+static bool hevc = false;
 
 static void expect(VAStatus got, VAStatus wanted = VA_STATUS_SUCCESS) {
     if (got != wanted) {
@@ -45,7 +48,8 @@ struct Session {
     VABufferID coded[count];
     explicit Session(VADisplay d, bool overflow = false) : display(d) {
         VAConfigAttrib attr{VAConfigAttribRateControl, VA_RC_CQP};
-        expect(vaCreateConfig(d, VAProfileH264High, VAEntrypointEncSlice, &attr, 1, &config));
+        expect(vaCreateConfig(d, hevc ? VAProfileHEVCMain : VAProfileH264High, VAEntrypointEncSlice,
+                              &attr, 1, &config));
         bool staging = std::getenv("IRIS_TEST_STAGING") != nullptr;
         expect(vaCreateSurfaces(d, VA_RT_FORMAT_YUV420, staging ? 768 : width,
                                 staging ? 512 : height, inputs, count, nullptr, 0));
@@ -86,7 +90,8 @@ struct Session {
         expect(vaDestroySurfaces(display, recon, count));
         expect(vaDestroyConfig(display, config));
     }
-    void submit(unsigned frame, VAStatus wanted = VA_STATUS_SUCCESS) {
+    void submit(unsigned frame, VAStatus wanted = VA_STATUS_SUCCESS, unsigned invalid = 0,
+                bool non_idr = false) {
         unsigned i = frame % count;
         VAEncSequenceParameterBufferH264 seq{};
         seq.level_idc = 31;
@@ -109,13 +114,57 @@ struct Session {
         slice.slice_type = frame % 17 == 0 ? 2 : 0;
         slice.macroblock_info = VA_INVALID_ID;
         slice.RefPicList0[0].picture_id = recon[(frame + count - 1) % count];
+        if (non_idr)
+            pic.pic_fields.bits.idr_pic_flag = 0;
         VABufferID parameters[3];
-        expect(vaCreateBuffer(display, context, VAEncSequenceParameterBufferType, sizeof(seq), 1,
-                              &seq, &parameters[0]));
-        expect(vaCreateBuffer(display, context, VAEncPictureParameterBufferType, sizeof(pic), 1,
-                              &pic, &parameters[1]));
-        expect(vaCreateBuffer(display, context, VAEncSliceParameterBufferType, sizeof(slice), 1,
-                              &slice, &parameters[2]));
+        if (hevc) {
+            VAEncSequenceParameterBufferHEVC hs{};
+            hs.general_profile_idc = 1;
+            hs.general_level_idc = 93;
+            hs.pic_width_in_luma_samples = width;
+            hs.pic_height_in_luma_samples = height;
+            hs.seq_fields.bits.chroma_format_idc = 1;
+            hs.log2_diff_max_min_luma_coding_block_size = 2;
+            hs.ip_period = 1;
+            VAEncPictureParameterBufferHEVC hp{};
+            hp.decoded_curr_pic.picture_id = recon[i];
+            hp.coded_buf = coded[i];
+            hp.pic_init_qp = pic.pic_init_qp;
+            hp.pic_fields.bits.idr_pic_flag = pic.pic_fields.bits.idr_pic_flag;
+            hp.pic_fields.bits.coding_type = slice.slice_type == 2 ? 1 : 2;
+            hp.pic_fields.bits.reference_pic_flag = 1;
+            VAEncSliceParameterBufferHEVC sl{};
+            sl.num_ctu_in_slice = (width + 31) / 32 * ((height + 31) / 32);
+            sl.slice_type = slice.slice_type == 2 ? 2 : 1;
+            sl.ref_pic_list0[0].picture_id = slice.RefPicList0[0].picture_id;
+            sl.slice_fields.bits.last_slice_of_pic_flag = 1;
+            sl.slice_fields.bits.slice_loop_filter_across_slices_enabled_flag = 1;
+            if (invalid == 1)
+                sl.slice_type = 0; // B frame.
+            if (invalid == 2)
+                sl.num_ctu_in_slice = 1; // Partial picture.
+            if (invalid == 3)
+                hp.pic_fields.bits.tiles_enabled_flag = 1;
+            if (invalid == 4)
+                hp.pic_init_qp = 52;
+            if (invalid == 5)
+                sl.slice_beta_offset_div2 = 7;
+            if (invalid == 6)
+                sl.ref_pic_list0[0].flags = VA_PICTURE_HEVC_LONG_TERM_REFERENCE;
+            expect(vaCreateBuffer(display, context, VAEncSequenceParameterBufferType, sizeof(hs), 1,
+                                  &hs, &parameters[0]));
+            expect(vaCreateBuffer(display, context, VAEncPictureParameterBufferType, sizeof(hp), 1,
+                                  &hp, &parameters[1]));
+            expect(vaCreateBuffer(display, context, VAEncSliceParameterBufferType, sizeof(sl), 1,
+                                  &sl, &parameters[2]));
+        } else {
+            expect(vaCreateBuffer(display, context, VAEncSequenceParameterBufferType, sizeof(seq),
+                                  1, &seq, &parameters[0]));
+            expect(vaCreateBuffer(display, context, VAEncPictureParameterBufferType, sizeof(pic), 1,
+                                  &pic, &parameters[1]));
+            expect(vaCreateBuffer(display, context, VAEncSliceParameterBufferType, sizeof(slice), 1,
+                                  &slice, &parameters[2]));
+        }
         expect(vaBeginPicture(display, context, inputs[i]));
         expect(vaRenderPicture(display, context, parameters, 3));
         expect(vaEndPicture(display, context), wanted);
@@ -145,31 +194,56 @@ struct Session {
         require(status == VASurfaceReady, "reconstruction status is not ready after sync");
     }
 };
-static std::vector<unsigned char> encode(VADisplay d, unsigned depth) {
+static std::vector<unsigned char> encode(VADisplay d, unsigned depth, bool non_idr = false) {
     Session session(d);
     std::vector<unsigned char> stream;
     constexpr unsigned frames = 96;
     for (unsigned i = 0; i < frames; ++i) {
         if (i >= depth)
             session.collect(i - depth, stream);
-        session.submit(i);
+        session.submit(i, VA_STATUS_SUCCESS, 0, non_idr && i && i % 17 == 0);
     }
     for (unsigned i = frames - depth; i < frames; ++i)
         session.collect(i, stream);
     return stream;
 }
 int main(int argc, char **argv) {
-    if (argc != 2)
+    if (argc != 2 && !(argc == 3 && !std::strcmp(argv[2], "--hevc")))
         return 2;
+    hevc = argc == 3;
     int fd = open("/dev/dri/renderD128", O_RDWR | O_CLOEXEC);
     require(fd >= 0, "DRM open");
     VADisplay display = vaGetDisplayDRM(fd);
     int major, minor;
     expect(vaInitialize(display, &major, &minor));
+    if (hevc) {
+        VAConfigID unsupported;
+        expect(vaCreateConfig(display, VAProfileHEVCMain10, VAEntrypointEncSlice, nullptr, 0,
+                              &unsupported),
+               VA_STATUS_ERROR_UNSUPPORTED_ENTRYPOINT);
+        for (unsigned invalid = 1; invalid <= 6; ++invalid) {
+            Session s(display);
+            if (invalid == 6) {
+                s.submit(0);
+                std::vector<unsigned char> output;
+                s.collect(0, output);
+            }
+            s.submit(invalid == 6 ? 1 : 0,
+                     invalid == 4 || invalid == 5 ? VA_STATUS_ERROR_INVALID_PARAMETER
+                                                  : VA_STATUS_ERROR_UNIMPLEMENTED,
+                     invalid);
+            // Rejection before submission must leave the session usable.
+            s.submit(invalid == 6 ? 1 : 0);
+        }
+    }
     auto serial = encode(display, 1);
     auto parallel = encode(display, 8);
     require(serial == parallel, "async changed QP/IDR/reference behavior");
-    FILE *file = std::fopen((std::string(argv[1]) + "/async.h264").c_str(), "wb");
+    require(
+        encode(display, 1, true) == serial && encode(display, 8, true) == serial,
+        "non-IDR I requests must match explicitly requested IDRs, including following P frames");
+    FILE *file =
+        std::fopen((std::string(argv[1]) + (hevc ? "/async.hevc" : "/async.h264")).c_str(), "wb");
     require(file && std::fwrite(parallel.data(), 1, parallel.size(), file) == parallel.size(),
             "write");
     require(!std::fclose(file), "close");

@@ -26,6 +26,27 @@ and Sunshine. HEVC encoding is tested with FFmpeg and GStreamer.
 - Compatible DMA-BUF paths avoid raw-frame copies. Applications that cache
   surfaces before decoding use a GPU copy by default.
 
+## Performance
+
+HEVC Main (8-bit) throughput on **Radxa Dragon Q8B — SC8280XP, Iris HFI Gen2**,
+using FFmpeg 9.0.1 and GStreamer 1.28.6. Values are average frames per second.
+
+| Pipeline | Operation | 720p (1280×720) | 1080p (1920×1080) | 4K (3840×2160) |
+| --- | --- | ---: | ---: | ---: |
+| FFmpeg VA-API | Decode | 1111 | 806 | 297 |
+| FFmpeg VA-API | Encode | 1289 | 714 | 206 |
+| GStreamer VA | Decode | 1088 | 823 | 278 |
+| GStreamer VA | Encode | 1285 | 709 | 206 |
+| GStreamer direct V4L2 | Decode | 1199 | 882 | 330 |
+| GStreamer direct V4L2 | Encode | 1287 | 724 | 210 |
+
+Synthetic I/P streams, GOP 60, VBR at 5 / 10 / 20 Mbps respectively. Encoding
+includes CPU NV12 upload; FFmpeg encoding uses **`async_depth=4`**. Decoding waits
+for completed frames without CPU download or rendering. Results are three-run
+means, except 4K encoding, which uses one completed run; each run processes
+9,000 / 6,000 / 2,400 frames respectively. Actual performance depends on content
+and pipeline configuration.
+
 ## Requirements
 
 - Linux with the Qualcomm Iris stateful driver and MSM DRM support.

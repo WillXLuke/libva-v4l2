@@ -1,0 +1,9 @@
+#!/usr/bin/make -f
+
+%:
+	dh $@ --buildsystem=meson
+
+override_dh_installdocs:
+	dh_installdocs
+	install -d debian/libva-v4l2/usr/share/doc/libva-v4l2
+	cp -a patches debian/libva-v4l2/usr/share/doc/libva-v4l2/

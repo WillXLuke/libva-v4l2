@@ -5,6 +5,7 @@
 # Build and development artifacts.
 /build/
 /build-*/
+/obj-*/
 /subprojects/packagecache/
 /compile_commands.json
 /.cache/
@@ -21,3 +22,16 @@ __pycache__/
 /packaging/arch/pkg/
 /packaging/arch/*.tar.gz
 /packaging/arch/*.pkg.tar.zst
+
+# Local Debian package builds.
+/output/
+/debian/.debhelper/
+/debian/libva-v4l2/
+/debian/tmp/
+/debian/files
+/debian/*.debhelper.log
+/debian/*.substvars
+/debian/debhelper-build-stamp
+/*.buildinfo
+/*.changes
+/*.deb

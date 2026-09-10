@@ -61,6 +61,11 @@ and pipeline configuration.
 
 ## Build and install
 
+The Debian package CI builds one ARM64 package on Ubuntu Noble, then checks
+installation and driver loading on Debian Trixie, Ubuntu Noble, and Ubuntu
+Resolute. Tag builds publish the same package and debug symbols to a draft
+GitHub Release after all checks pass. Hardware codec testing is separate.
+
 On Arch Linux:
 
 ```sh
@@ -94,8 +99,9 @@ meson compile -C build
 sudo meson install -C build
 ```
 
-FastCV VPP defaults to `-Dfastcv=auto` (enabled when dependencies are available).
-Use `-Dfastcv=disabled` to disable it or `-Dfastcv=enabled` to require build dependencies.
+FastCV VPP defaults to `-Dfastcv=disabled`. Use `-Dfastcv=auto` to enable it
+when dependencies are available or `-Dfastcv=enabled` to require build dependencies.
+Debian / Ubuntu packages explicitly disable FastCV for consistent distribution builds.
 FastCV is loaded dynamically; missing runtime libraries disable only VPP.
 
 Adjust `libdir` if your system uses a driver directory other than `/usr/lib/dri`.

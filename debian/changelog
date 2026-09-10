@@ -1,19 +1,14 @@
-libva-v4l2 (0.1.0-2) unstable; urgency=medium
+libva-v4l2 (1.0.0-1) unstable; urgency=medium
 
-  * Stamp encoder buffers with the real frame period so firmware rate
-    control honors CBR/VBR bitrates. Fixes severe quality loss (max QP)
-    in rate-controlled encodes.
-  * Add build.sh; packages are collected in ./output.
-  * Expose VA quality levels 1-4 and map them to RC maximum-QP ceilings
-    (30/37/44/51), so clients such as Sunshine can trade quality for speed.
-  * Advertise and emulate QVBR (VBR with a quality QP ceiling), ICQ
-    (fixed QP seeded from the quality factor), and AVBR (CBR), so clients
-    no longer fall back silently for those rate-control selections.
+  * Release 1.0.0.
+  * Build one ARM64 package on Noble for Trixie, Noble, and Resolute.
+  * Keep FastCV disabled and retain GStreamer VA session configuration.
 
- -- willxluke <durianxe@outlook.com>  Wed, 09 Sep 2026 14:05:00 +0800
+ -- Xilin Wu <sophon@radxa.com>  Thu, 10 Sep 2026 17:03:16 +0800
 
 libva-v4l2 (0.1.0-1) unstable; urgency=medium
 
-  * Initial Debian packaging.
+  * Initial Debian packaging for RadxaOS.
+  * Disable FastCV and retain GStreamer VA session configuration.
 
- -- willxluke <durianxe@outlook.com>  Wed, 09 Sep 2026 11:28:42 +0800
+ -- Xilin Wu <sophon@radxa.com>  Thu, 10 Sep 2026 16:00:00 +0800

@@ -1,9 +1,13 @@
 #!/usr/bin/make -f
 
+export DEB_BUILD_MAINT_OPTIONS = hardening=+all
+
 %:
 	dh $@ --buildsystem=meson
 
-override_dh_installdocs:
-	dh_installdocs
-	install -d debian/libva-v4l2/usr/share/doc/libva-v4l2
-	cp -a patches debian/libva-v4l2/usr/share/doc/libva-v4l2/
+override_dh_auto_configure:
+	dh_auto_configure -- -Dfastcv=disabled
+
+override_dh_auto_install:
+	dh_auto_install
+	rm -rf debian/libva-v4l2/usr/share/licenses

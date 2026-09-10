@@ -23,15 +23,18 @@ __pycache__/
 /packaging/arch/*.tar.gz
 /packaging/arch/*.pkg.tar.zst
 
-# Local Debian package builds.
+# Local Debian package builds and packaging artifacts.
 /output/
 /debian/.debhelper/
 /debian/libva-v4l2/
 /debian/tmp/
 /debian/files
+/debian/*.debhelper
 /debian/*.debhelper.log
 /debian/*.substvars
 /debian/debhelper-build-stamp
+/artifacts/
+/*-build-deps_*.deb
 /*.buildinfo
 /*.changes
 /*.deb

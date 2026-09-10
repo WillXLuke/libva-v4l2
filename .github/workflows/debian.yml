@@ -1,0 +1,102 @@
+name: Debian packages
+
+on:
+  push:
+    branches: ['**']
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04-arm
+    container: ubuntu:noble
+    env:
+      DEBIAN_FRONTEND: noninteractive
+    steps:
+      - name: Install packaging tools
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends ca-certificates git build-essential devscripts equivs lintian
+      - uses: actions/checkout@v4
+      - name: Install build dependencies
+        run: mk-build-deps --install --remove --tool 'apt-get -y --no-install-recommends' debian/control
+      - name: Build binary packages
+        run: |
+          version=$(dpkg-parsechangelog -S Version)
+          if [ "$GITHUB_REF_TYPE" = tag ]; then
+            case "$GITHUB_REF_NAME" in
+              "v$version"|"v${version%-*}") ;;
+              *) echo 'Release tag does not match the package version' >&2; exit 1 ;;
+            esac
+          fi
+          dpkg-buildpackage -us -uc -b --changes-option=-DDistribution=noble
+          mkdir -p artifacts
+          for artifact in ../*.deb ../*.ddeb ../*.buildinfo ../*.changes; do
+            if [ -f "$artifact" ]; then
+              cp "$artifact" artifacts/
+            fi
+          done
+      - name: Inspect packages
+        run: |
+          lintian --fail-on error artifacts/*.changes
+          dpkg-deb --contents artifacts/libva-v4l2_*.deb
+      - uses: actions/upload-artifact@v4
+        with:
+          name: libva-v4l2-arm64
+          path: artifacts/*
+          if-no-files-found: error
+
+  validate:
+    needs: build
+    runs-on: ubuntu-24.04-arm
+    strategy:
+      fail-fast: false
+      matrix:
+        image: [debian:trixie, ubuntu:noble, ubuntu:resolute]
+    container: ${{ matrix.image }}
+    env:
+      DEBIAN_FRONTEND: noninteractive
+    steps:
+      - name: Install validation tools
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends ca-certificates git python3 libva2
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: libva-v4l2-arm64
+          path: artifacts
+      - name: Install and load the Noble-built driver
+        run: |
+          apt-get install -y ./artifacts/libva-v4l2_*.deb
+          test "$(readlink /usr/lib/aarch64-linux-gnu/dri/msm_drv_video.so)" = v4l2_drv_video.so
+          cmp packaging/environment/60-libva-v4l2.conf /usr/lib/environment.d/60-libva-v4l2.conf
+          cmp packaging/environment/libva-v4l2.sh /etc/profile.d/libva-v4l2.sh
+          python3 - <<'PYTHON'
+          import ctypes
+          import os
+          ctypes.CDLL('libva.so.2', mode=os.RTLD_NOW | os.RTLD_GLOBAL)
+          driver = ctypes.CDLL('/usr/lib/aarch64-linux-gnu/dri/msm_drv_video.so', mode=os.RTLD_NOW)
+          getattr(driver, '__vaDriverInit_1_0')
+          print('Driver loaded and VA-API entry point resolved successfully.')
+          PYTHON
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [build, validate]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: libva-v4l2-arm64
+          path: artifacts
+      - uses: softprops/action-gh-release@v2
+        with:
+          draft: true
+          files: artifacts/*

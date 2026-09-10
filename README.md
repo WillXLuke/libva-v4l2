@@ -61,6 +61,11 @@ and pipeline configuration.
 
 ## Build and install
 
+The Debian package CI builds one ARM64 package on Ubuntu Noble, then checks
+installation and driver loading on Debian Trixie, Ubuntu Noble, and Ubuntu
+Resolute. Tag builds publish the same package and debug symbols to a draft
+GitHub Release after all checks pass. Hardware codec testing is separate.
+
 On Arch Linux:
 
 ```sh

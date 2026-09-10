@@ -1,6 +1,6 @@
 project(
   'libva-v4l2', 'cpp', 'c',
-  version: '0.1.0',
+  version: '1.0.0',
   meson_version: '>=0.61.0',
   license: 'MIT',
   default_options: ['cpp_std=c++17', 'warning_level=2'],

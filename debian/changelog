@@ -1,3 +1,11 @@
+libva-v4l2 (1.0.0-1) unstable; urgency=medium
+
+  * Release 1.0.0.
+  * Build one ARM64 package on Noble for Trixie, Noble, and Resolute.
+  * Keep FastCV disabled and retain GStreamer VA session configuration.
+
+ -- Xilin Wu <sophon@radxa.com>  Thu, 10 Sep 2026 17:03:16 +0800
+
 libva-v4l2 (0.1.0-1) unstable; urgency=medium
 
   * Initial Debian packaging for RadxaOS.

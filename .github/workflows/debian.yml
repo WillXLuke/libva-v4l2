@@ -28,7 +28,10 @@ jobs:
         run: |
           version=$(dpkg-parsechangelog -S Version)
           if [ "$GITHUB_REF_TYPE" = tag ]; then
-            test "$GITHUB_REF_NAME" = "v$version"
+            case "$GITHUB_REF_NAME" in
+              "v$version"|"v${version%-*}") ;;
+              *) echo 'Release tag does not match the package version' >&2; exit 1 ;;
+            esac
           fi
           dpkg-buildpackage -us -uc -b --changes-option=-DDistribution=noble
           mkdir -p artifacts
